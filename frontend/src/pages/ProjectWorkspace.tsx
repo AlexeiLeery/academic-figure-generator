@@ -237,7 +237,7 @@ export function ProjectWorkspace() {
         try {
             const beforeCount = prompts.length;
             const payload: any = {
-                section_indices: promptMode === 'sections' ? selectedSectionIndices : null,
+                section_indices: selectedSectionIndices.length ? selectedSectionIndices : null,
                 color_scheme: currentProject?.color_scheme || 'okabe-ito',
                 figure_types: promptMode === 'overall' ? ['overall_framework'] : null,
                 user_request: promptRequest.trim() ? promptRequest.trim() : null,
@@ -317,10 +317,10 @@ export function ProjectWorkspace() {
                                 </SelectContent>
                             </Select>
                         </div>
-                        <p className="text-xs text-muted-foreground mt-2">
-                            “整体架构图”只生成 1 条提示词；“按章节生成”会基于所选章节生成多条提示词。
-                        </p>
-                    </div>
+                            <p className="text-xs text-muted-foreground mt-2">
+                                “整体架构图”只生成 1 条提示词；“按章节生成”会基于所选章节生成多条提示词。章节勾选对两种方式都生效（用于限定参考范围）。
+                            </p>
+                        </div>
 
                     {/* Upload Area */}
                     <div className="p-4 border-b">
@@ -383,7 +383,6 @@ export function ProjectWorkspace() {
                                                     type="checkbox"
                                                     className="mt-1"
                                                     checked={selectedSectionIndices.includes(idx)}
-                                                    disabled={promptMode !== 'sections'}
                                                     onChange={(e) => {
                                                         const checked = e.target.checked;
                                                         setSelectedSectionIndices((prev) => {

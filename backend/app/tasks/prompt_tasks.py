@@ -6,7 +6,7 @@ Flow (generate_prompts_task):
   2. Build Claude API request using the academic-figure system prompt.
   3. Call Claude API via httpx (synchronous client – no asyncio in Celery).
   4. Parse the JSON array response into individual Prompt records.
-  5. Persist Prompt rows (table: prompts) and update Document.parse_status.
+  5. Persist Prompt rows (table: prompts).
 
 Flow (parse_document_task):
   1. Load document record from DB (storage_path, file_type).
@@ -400,18 +400,6 @@ def generate_prompts_task(
 
     try:
         # ------------------------------------------------------------------
-        # 1. Update document status -> processing
-        # ------------------------------------------------------------------
-        db.execute(
-            text(
-                "UPDATE documents SET parse_status = 'parsing', "
-                "updated_at = :now WHERE id = :doc_id"
-            ),
-            {"now": datetime.now(UTC), "doc_id": document_id},
-        )
-        db.commit()
-
-        # ------------------------------------------------------------------
         # 2. Load document sections from JSONB column
         # ------------------------------------------------------------------
         row = db.execute(
@@ -580,16 +568,6 @@ def generate_prompts_task(
                 },
             )
 
-        # ------------------------------------------------------------------
-        # 8. Mark document parse_status as completed
-        # ------------------------------------------------------------------
-        db.execute(
-            text(
-                "UPDATE documents SET parse_status = 'completed', "
-                "parse_error = NULL, updated_at = :now WHERE id = :doc_id"
-            ),
-            {"now": now, "doc_id": document_id},
-        )
         db.commit()
 
         result = {
@@ -607,7 +585,6 @@ def generate_prompts_task(
         logger.error(
             "generate_prompts_task soft time limit exceeded | document_id=%s", document_id
         )
-        _mark_document_failed(db, document_id, "Prompt generation timed out (240 s limit).")
         raise
 
     except (httpx.HTTPStatusError, httpx.TransportError) as exc:
@@ -619,9 +596,6 @@ def generate_prompts_task(
             countdown = 30 * (2 ** self.request.retries)  # 30s, 60s
             raise self.retry(exc=exc, countdown=countdown)
         except MaxRetriesExceededError:
-            _mark_document_failed(
-                db, document_id, f"Claude API error after retries: {exc}"
-            )
             raise
 
     except Exception as exc:
@@ -629,7 +603,6 @@ def generate_prompts_task(
             "Unexpected error in generate_prompts_task | document_id=%s\n%s",
             document_id, traceback.format_exc(),
         )
-        _mark_document_failed(db, document_id, str(exc))
         raise
 
     finally:
@@ -641,7 +614,11 @@ def generate_prompts_task(
 # ---------------------------------------------------------------------------
 
 def _mark_document_failed(db: Session, document_id: str, reason: str) -> None:
-    """Best-effort status update; swallows errors to avoid masking the original."""
+    """Deprecated helper (kept for compatibility).
+
+    Prompt generation no longer mutates document parse_status; this should only
+    be used by document parsing code paths.
+    """
     try:
         db.execute(
             text(
