@@ -1,0 +1,47 @@
+"""SystemSettings model – key/value store for admin-configurable settings."""
+
+from sqlalchemy import Integer, String, Text
+from sqlalchemy.orm import Mapped, mapped_column
+
+from .base import Base, TimestampMixin
+
+
+class SystemSettings(Base, TimestampMixin):
+    """Single-row table holding global admin settings.
+
+    We use ``id = 1`` as the canonical (only) row, enforced at the
+    application level.
+    """
+
+    __tablename__ = "system_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+
+    # Claude API
+    claude_api_key_enc: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="AES-256 encrypted system Claude API key",
+    )
+    claude_api_base_url: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+        comment="Custom Claude API base URL (e.g. proxy)",
+    )
+    claude_model: Mapped[str | None] = mapped_column(
+        String(100),
+        nullable=True,
+        comment="Claude model override",
+    )
+
+    # NanoBanana API
+    nanobanana_api_key_enc: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+        comment="AES-256 encrypted system NanoBanana API key",
+    )
+    nanobanana_api_base_url: Mapped[str | None] = mapped_column(
+        String(500),
+        nullable=True,
+        comment="Custom NanoBanana API base URL",
+    )

@@ -1,0 +1,216 @@
+import { useEffect, useState } from 'react';
+import { api } from '../lib/api';
+import { useAuthStore } from '../store/authStore';
+import { Button } from '../components/ui/button';
+import { Input } from '../components/ui/input';
+import { Label } from '../components/ui/label';
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '../components/ui/card';
+import { RefreshCw, CheckCircle2, Shield, Server } from 'lucide-react';
+
+interface SystemSettings {
+    claude_api_key_set: boolean;
+    claude_api_base_url: string | null;
+    claude_model: string | null;
+    nanobanana_api_key_set: boolean;
+    nanobanana_api_base_url: string | null;
+}
+
+export function AdminSettings() {
+    const { user } = useAuthStore();
+    const [isLoading, setIsLoading] = useState(false);
+    const [isFetching, setIsFetching] = useState(true);
+    const [success, setSuccess] = useState('');
+
+    const [settings, setSettings] = useState<SystemSettings>({
+        claude_api_key_set: false,
+        claude_api_base_url: null,
+        claude_model: null,
+        nanobanana_api_key_set: false,
+        nanobanana_api_base_url: null,
+    });
+
+    const [formData, setFormData] = useState({
+        claude_api_key: '',
+        claude_api_base_url: '',
+        claude_model: '',
+        nanobanana_api_key: '',
+        nanobanana_api_base_url: '',
+    });
+
+    useEffect(() => {
+        fetchSettings();
+    }, []);
+
+    const fetchSettings = async () => {
+        setIsFetching(true);
+        try {
+            const res = await api.get('/admin/settings');
+            const data: SystemSettings = res.data;
+            setSettings(data);
+            setFormData(prev => ({
+                ...prev,
+                claude_api_base_url: data.claude_api_base_url || '',
+                claude_model: data.claude_model || '',
+                nanobanana_api_base_url: data.nanobanana_api_base_url || '',
+            }));
+        } catch (e) {
+            console.error('Failed to fetch system settings:', e);
+        } finally {
+            setIsFetching(false);
+        }
+    };
+
+    const handleSave = async () => {
+        setIsLoading(true);
+        setSuccess('');
+        try {
+            const payload: any = {};
+
+            if (formData.claude_api_key) payload.claude_api_key = formData.claude_api_key;
+            // Always send URL/model so admin can clear them
+            payload.claude_api_base_url = formData.claude_api_base_url || null;
+            payload.claude_model = formData.claude_model || null;
+
+            if (formData.nanobanana_api_key) payload.nanobanana_api_key = formData.nanobanana_api_key;
+            payload.nanobanana_api_base_url = formData.nanobanana_api_base_url || null;
+
+            const res = await api.put('/admin/settings', payload);
+            setSettings(res.data);
+            setSuccess('系统设置保存成功！');
+
+            // Clear key fields after save
+            setFormData(prev => ({ ...prev, claude_api_key: '', nanobanana_api_key: '' }));
+        } catch (e) {
+            console.error(e);
+            alert('保存系统设置失败，请重试');
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    if (!user?.is_admin) {
+        return (
+            <div className="flex items-center justify-center min-h-[60vh]">
+                <div className="text-center">
+                    <Shield className="w-16 h-16 mx-auto text-muted-foreground/30 mb-4" />
+                    <h2 className="text-xl font-semibold text-muted-foreground">权限不足</h2>
+                    <p className="text-sm text-muted-foreground mt-1">您需要管理员权限才能访问此页面。</p>
+                </div>
+            </div>
+        );
+    }
+
+    if (isFetching) {
+        return (
+            <div className="flex items-center justify-center min-h-[60vh]">
+                <RefreshCw className="w-6 h-6 animate-spin text-muted-foreground" />
+            </div>
+        );
+    }
+
+    return (
+        <div className="max-w-2xl mx-auto space-y-6">
+            <div>
+                <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+                    <Shield className="w-7 h-7 text-primary" />
+                    系统管理
+                </h1>
+                <p className="text-muted-foreground mt-1">管理系统级 API 密钥、请求地址和模型配置。这些设置为所有用户提供默认值。</p>
+            </div>
+
+            {/* Claude API Settings */}
+            <Card>
+                <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                        <Server className="w-5 h-5" />
+                        Claude API 配置
+                    </CardTitle>
+                    <CardDescription>系统默认的 Claude API 密钥和请求地址。用户 BYOK 设置优先于此处配置。</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                    <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                            <Label htmlFor="sys_claude_key">系统 Claude API Key</Label>
+                            {settings.claude_api_key_set && (
+                                <span className="flex items-center text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded-full"><CheckCircle2 className="w-3 h-3 mr-1" /> 已配置</span>
+                            )}
+                        </div>
+                        <Input
+                            id="sys_claude_key"
+                            type="password"
+                            placeholder={settings.claude_api_key_set ? "sk-ant-**** (已设置)" : "sk-ant-..."}
+                            value={formData.claude_api_key}
+                            onChange={e => setFormData({ ...formData, claude_api_key: e.target.value })}
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <Label htmlFor="sys_claude_url">Claude API 请求地址</Label>
+                        <Input
+                            id="sys_claude_url"
+                            placeholder="https://api.anthropic.com （留空使用默认地址）"
+                            value={formData.claude_api_base_url}
+                            onChange={e => setFormData({ ...formData, claude_api_base_url: e.target.value })}
+                        />
+                        <p className="text-xs text-muted-foreground">如果使用代理或中转服务，请填写完整的 API 基础地址。留空则使用 Anthropic 官方地址。</p>
+                    </div>
+                    <div className="space-y-2">
+                        <Label htmlFor="sys_claude_model">Claude 模型名称</Label>
+                        <Input
+                            id="sys_claude_model"
+                            placeholder="claude-sonnet-4-20250514 （留空使用默认模型）"
+                            value={formData.claude_model}
+                            onChange={e => setFormData({ ...formData, claude_model: e.target.value })}
+                        />
+                    </div>
+                </CardContent>
+            </Card>
+
+            {/* NanoBanana API Settings */}
+            <Card>
+                <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                        <Server className="w-5 h-5" />
+                        NanoBanana API 配置
+                    </CardTitle>
+                    <CardDescription>系统默认的配图服务 API 密钥和请求地址。</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                    <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                            <Label htmlFor="sys_nb_key">系统 NanoBanana API Key</Label>
+                            {settings.nanobanana_api_key_set && (
+                                <span className="flex items-center text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded-full"><CheckCircle2 className="w-3 h-3 mr-1" /> 已配置</span>
+                            )}
+                        </div>
+                        <Input
+                            id="sys_nb_key"
+                            type="password"
+                            placeholder={settings.nanobanana_api_key_set ? "sk-**** (已设置)" : "输入配图服务 API Key"}
+                            value={formData.nanobanana_api_key}
+                            onChange={e => setFormData({ ...formData, nanobanana_api_key: e.target.value })}
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <Label htmlFor="sys_nb_url">NanoBanana API 请求地址</Label>
+                        <Input
+                            id="sys_nb_url"
+                            placeholder="https://api.ikuncode.cc （留空使用默认地址）"
+                            value={formData.nanobanana_api_base_url}
+                            onChange={e => setFormData({ ...formData, nanobanana_api_base_url: e.target.value })}
+                        />
+                        <p className="text-xs text-muted-foreground">如果使用代理或中转服务，请填写完整的 API 基础地址。</p>
+                    </div>
+                </CardContent>
+                <CardFooter className="flex justify-between border-t bg-muted/40 p-4">
+                    <div>
+                        {success && <p className="text-sm text-green-600 font-medium">{success}</p>}
+                    </div>
+                    <Button onClick={handleSave} disabled={isLoading}>
+                        {isLoading && <RefreshCw className="w-4 h-4 mr-2 animate-spin" />}
+                        保存系统设置
+                    </Button>
+                </CardFooter>
+            </Card>
+        </div>
+    );
+}

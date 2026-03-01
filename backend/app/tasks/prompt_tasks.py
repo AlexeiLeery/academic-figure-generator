@@ -1,0 +1,585 @@
+"""
+Celery tasks: parse uploaded documents and generate figure prompts via Claude API.
+
+Flow (generate_prompts_task):
+  1. Load document sections from the Document.sections JSONB field (sync session).
+  2. Build Claude API request using the academic-figure system prompt.
+  3. Call Claude API via httpx (synchronous client – no asyncio in Celery).
+  4. Parse the JSON array response into individual Prompt records.
+  5. Persist Prompt rows (table: prompts) and update Document.parse_status.
+
+Flow (parse_document_task):
+  1. Load document record from DB (storage_path, file_type).
+  2. Download raw file bytes from MinIO via StorageService.
+  3. Parse content using DocumentService.parse().
+  4. Update document row with full_text, sections, page_count, parse_status.
+
+Retry policy: up to 2 retries with exponential back-off on transient errors.
+Soft time limit: 240 s (raises SoftTimeLimitExceeded for graceful cleanup).
+Hard time limit: 300 s (SIGKILL).
+
+Schema reference (from app/models/):
+  documents:  id, parse_status, parse_error, sections (JSONB), full_text,
+              page_count, storage_path, file_type, updated_at
+  prompts:    id, project_id, document_id, user_id, figure_number, title,
+              original_prompt, suggested_figure_type, suggested_aspect_ratio,
+              generation_status, claude_model, created_at, updated_at
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import traceback
+import uuid
+from datetime import UTC, datetime
+from typing import Any
+
+import httpx
+from celery import Task
+from celery.exceptions import MaxRetriesExceededError, SoftTimeLimitExceeded
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from app.core.prompts.color_schemes import PRESET_COLOR_SCHEMES, OKABE_ITO
+from app.core.prompts.figure_types import FIGURE_TYPES
+from app.core.prompts.system_prompt import ACADEMIC_FIGURE_SYSTEM_PROMPT
+from app.core.security import decrypt_api_key
+from app.tasks.celery_app import celery_app
+from app.tasks.db import _get_session
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Claude API helpers
+# ---------------------------------------------------------------------------
+
+CLAUDE_API_URL = "https://api.anthropic.com/v1/messages"
+CLAUDE_MODEL: str = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-20250514")
+CLAUDE_MAX_TOKENS: int = int(os.environ.get("CLAUDE_MAX_TOKENS", "8192"))
+CLAUDE_API_KEY: str = os.environ.get("CLAUDE_API_KEY", "")
+
+
+def _build_user_prompt(
+    sections: list[dict[str, Any]],
+    color_scheme: dict[str, str],
+    figure_types: list[str] | None,
+) -> str:
+    """Construct the user-facing message sent to Claude."""
+    type_hint = ""
+    if figure_types:
+        type_descriptions = [
+            f"- {ft}: {FIGURE_TYPES[ft]['description']}"
+            for ft in figure_types
+            if ft in FIGURE_TYPES
+        ]
+        type_hint = (
+            "\n\nPreferred figure types for this paper:\n"
+            + "\n".join(type_descriptions)
+        )
+
+    color_block = json.dumps(color_scheme, indent=2)
+
+    section_text = "\n\n".join(
+        f"## Section {i + 1}: {s.get('title', 'Untitled')}\n{s.get('content', s.get('text', ''))}"
+        for i, s in enumerate(sections)
+    )
+
+    return (
+        f"Color palette to use (map exactly to the roles described in the system prompt):\n"
+        f"```json\n{color_block}\n```"
+        f"{type_hint}\n\n"
+        f"--- PAPER SECTIONS ---\n\n"
+        f"{section_text}\n\n"
+        f"--- END OF PAPER ---\n\n"
+        f"Generate one figure prompt per major section above. "
+        f"Return ONLY valid JSON array as specified in the system prompt. "
+        f"Each prompt field must be at least 500 words and extremely precise."
+    )
+
+
+def _call_claude_api(
+    user_prompt: str,
+    api_key: str,
+    timeout: float = 210.0,
+) -> str:
+    """
+    Synchronously call the Claude Messages API.
+
+    Returns the raw text content of the assistant's first message.
+    Raises httpx.HTTPStatusError on 4xx/5xx.
+    """
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    payload = {
+        "model": CLAUDE_MODEL,
+        "max_tokens": CLAUDE_MAX_TOKENS,
+        "system": ACADEMIC_FIGURE_SYSTEM_PROMPT,
+        "messages": [{"role": "user", "content": user_prompt}],
+    }
+
+    with httpx.Client(timeout=timeout) as client:
+        response = client.post(CLAUDE_API_URL, headers=headers, json=payload)
+        response.raise_for_status()
+        data = response.json()
+
+    for block in data.get("content", []):
+        if block.get("type") == "text":
+            return block["text"]
+
+    raise ValueError(f"Unexpected Claude API response structure: {data}")
+
+
+def _parse_figure_prompts(raw_text: str) -> list[dict[str, Any]]:
+    """
+    Extract the JSON array from Claude's response text.
+
+    Claude sometimes wraps the JSON in markdown code fences; strip them.
+    """
+    text = raw_text.strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        inner_lines = lines[1:]
+        if inner_lines and inner_lines[-1].strip() == "```":
+            inner_lines = inner_lines[:-1]
+        text = "\n".join(inner_lines).strip()
+
+    figures = json.loads(text)
+    if not isinstance(figures, list):
+        raise ValueError(f"Expected JSON array from Claude, got {type(figures)}")
+    return figures
+
+
+# ---------------------------------------------------------------------------
+# Celery task: parse_document_task
+# ---------------------------------------------------------------------------
+
+@celery_app.task(
+    bind=True,
+    queue="default",
+    max_retries=1,
+    soft_time_limit=100,
+    time_limit=120,
+    name="app.tasks.prompt_tasks.parse_document_task",
+)
+def parse_document_task(self: Task, document_id: str) -> dict[str, Any]:
+    """
+    Parse an uploaded document and store the extracted sections in the DB.
+
+    Args:
+        document_id: UUID of the Document record to process.
+
+    Returns:
+        dict with keys: document_id, page_count, section_count.
+    """
+    logger.info("parse_document_task started | document_id=%s", document_id)
+
+    db: Session = _get_session()
+
+    try:
+        # ------------------------------------------------------------------
+        # 1. Mark document as parsing
+        # ------------------------------------------------------------------
+        db.execute(
+            text(
+                "UPDATE documents SET parse_status = 'parsing', "
+                "updated_at = :now WHERE id = :doc_id"
+            ),
+            {"now": datetime.now(UTC), "doc_id": document_id},
+        )
+        db.commit()
+
+        # ------------------------------------------------------------------
+        # 2. Load document record
+        # ------------------------------------------------------------------
+        row = db.execute(
+            text(
+                "SELECT storage_path, file_type FROM documents WHERE id = :doc_id"
+            ),
+            {"doc_id": document_id},
+        ).fetchone()
+
+        if not row:
+            raise ValueError(f"Document not found: document_id={document_id}")
+
+        storage_path = row[0]
+        file_type = row[1]
+
+        # ------------------------------------------------------------------
+        # 3. Download raw file from MinIO
+        # ------------------------------------------------------------------
+        from app.services.storage_service import StorageService
+
+        storage = StorageService()
+        file_bytes = storage.download_file(storage_path)
+        logger.info(
+            "Downloaded document from MinIO | storage_path=%s size=%d",
+            storage_path, len(file_bytes),
+        )
+
+        # ------------------------------------------------------------------
+        # 4. Parse document
+        # ------------------------------------------------------------------
+        from app.services.document_service import DocumentService
+
+        doc_service = DocumentService()
+        parse_result = doc_service.parse(file_bytes, file_type)
+
+        full_text = parse_result.get("full_text", "")
+        sections = parse_result.get("sections", [])
+        page_count = parse_result.get("page_count")
+
+        logger.info(
+            "Parsed document | document_id=%s sections=%d page_count=%s",
+            document_id, len(sections), page_count,
+        )
+
+        # ------------------------------------------------------------------
+        # 5. Update document record
+        # ------------------------------------------------------------------
+        import json as _json
+
+        now = datetime.now(UTC)
+        db.execute(
+            text(
+                """
+                UPDATE documents SET
+                    full_text = :full_text,
+                    sections = :sections,
+                    page_count = :page_count,
+                    parse_status = 'completed',
+                    parse_error = NULL,
+                    updated_at = :now
+                WHERE id = :doc_id
+                """
+            ),
+            {
+                "full_text": full_text,
+                "sections": _json.dumps(sections),
+                "page_count": page_count,
+                "now": now,
+                "doc_id": document_id,
+            },
+        )
+        db.commit()
+
+        result = {
+            "document_id": document_id,
+            "page_count": page_count,
+            "section_count": len(sections),
+        }
+        logger.info(
+            "parse_document_task completed | document_id=%s sections=%d",
+            document_id, len(sections),
+        )
+        return result
+
+    except Exception as exc:
+        logger.error(
+            "Error in parse_document_task | document_id=%s\n%s",
+            document_id, traceback.format_exc(),
+        )
+        try:
+            db.execute(
+                text(
+                    "UPDATE documents SET parse_status = 'failed', "
+                    "parse_error = :reason, updated_at = :now WHERE id = :doc_id"
+                ),
+                {
+                    "reason": str(exc)[:2000],
+                    "now": datetime.now(UTC),
+                    "doc_id": document_id,
+                },
+            )
+            db.commit()
+        except Exception:
+            logger.exception(
+                "Failed to mark document as failed | document_id=%s", document_id
+            )
+        raise
+
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------------------
+# Celery task: generate_prompts_task
+# ---------------------------------------------------------------------------
+
+@celery_app.task(
+    bind=True,
+    queue="prompts",
+    max_retries=2,
+    soft_time_limit=240,
+    time_limit=300,
+    name="app.tasks.prompt_tasks.generate_prompts_task",
+)
+def generate_prompts_task(
+    self: Task,
+    project_id: str,
+    document_id: str,
+    user_id: str,
+    color_scheme: str,
+    custom_colors: dict | None,
+    figure_types: list[str] | None,
+    section_indices: list[int] | None = None,
+) -> dict[str, Any]:
+    """
+    Generate AI figure prompts from an uploaded academic document.
+
+    Args:
+        project_id:      UUID of the parent project.
+        document_id:     UUID of the Document record to process.
+        user_id:         UUID of the requesting user (for BYOK key lookup).
+        color_scheme:    Name of the preset color scheme (e.g. "okabe_ito").
+        custom_colors:   Optional dict of custom hex colors overriding the preset.
+        figure_types:    Optional list of preferred figure type slugs.
+        section_indices: Optional list of section indices to process (0-based).
+                         When provided, only those sections are sent to Claude.
+
+    Returns:
+        dict with keys: document_id, prompt_ids, figure_count.
+    """
+    logger.info(
+        "generate_prompts_task started | document_id=%s project_id=%s user_id=%s",
+        document_id, project_id, user_id,
+    )
+
+    db: Session = _get_session()
+
+    try:
+        # ------------------------------------------------------------------
+        # 1. Update document status -> processing
+        # ------------------------------------------------------------------
+        db.execute(
+            text(
+                "UPDATE documents SET parse_status = 'parsing', "
+                "updated_at = :now WHERE id = :doc_id"
+            ),
+            {"now": datetime.now(UTC), "doc_id": document_id},
+        )
+        db.commit()
+
+        # ------------------------------------------------------------------
+        # 2. Load document sections from JSONB column
+        # ------------------------------------------------------------------
+        row = db.execute(
+            text("SELECT sections FROM documents WHERE id = :doc_id"),
+            {"doc_id": document_id},
+        ).fetchone()
+
+        if not row:
+            raise ValueError(f"Document not found: document_id={document_id}")
+
+        raw_sections = row.sections
+        if not raw_sections:
+            raise ValueError(
+                f"Document has no parsed sections (document_id={document_id}). "
+                "Ensure document parsing completed before triggering prompt generation."
+            )
+
+        # sections is stored as JSONB; may be a list or dict with a 'sections' key
+        if isinstance(raw_sections, list):
+            sections = raw_sections
+        elif isinstance(raw_sections, dict):
+            sections = raw_sections.get("sections", list(raw_sections.values()))
+        else:
+            raise ValueError(f"Unexpected sections format: {type(raw_sections)}")
+
+        if not sections:
+            raise ValueError(f"Empty sections list for document_id={document_id}")
+
+        # ------------------------------------------------------------------
+        # 2a. Filter by section_indices if provided
+        # ------------------------------------------------------------------
+        if section_indices is not None:
+            total_sections = len(sections)
+            sections = [
+                sections[i] for i in section_indices if 0 <= i < total_sections
+            ]
+            if not sections:
+                raise ValueError(
+                    f"section_indices {section_indices} produced no valid sections "
+                    f"(document has {total_sections} sections)"
+                )
+            logger.info(
+                "Filtered to %d sections via section_indices=%s",
+                len(sections), section_indices,
+            )
+
+        logger.info("Loaded %d sections for document_id=%s", len(sections), document_id)
+
+        # ------------------------------------------------------------------
+        # 3. Resolve color scheme
+        # ------------------------------------------------------------------
+        base_colors: dict[str, str] = PRESET_COLOR_SCHEMES.get(
+            color_scheme, OKABE_ITO
+        ).copy()
+        if custom_colors:
+            base_colors.update(custom_colors)
+
+        # ------------------------------------------------------------------
+        # 4. Resolve API key (BYOK > platform key)
+        # ------------------------------------------------------------------
+        result = db.execute(
+            text("SELECT claude_api_key_enc FROM users WHERE id = :uid"),
+            {"uid": user_id},
+        )
+        byok_row = result.fetchone()
+        encrypted_key = byok_row[0] if byok_row else None
+
+        if encrypted_key:
+            api_key = decrypt_api_key(encrypted_key)
+            logger.info("Using BYOK Claude key for user_id=%s", user_id)
+        else:
+            api_key = CLAUDE_API_KEY
+            if not api_key:
+                raise ValueError(
+                    "No Claude API key available: set CLAUDE_API_KEY env var "
+                    "or add a BYOK key for this user."
+                )
+            logger.info("Using platform Claude key")
+
+        # ------------------------------------------------------------------
+        # 5. Build and send Claude API request
+        # ------------------------------------------------------------------
+        user_prompt = _build_user_prompt(sections, base_colors, figure_types)
+
+        logger.info(
+            "Calling Claude API | model=%s max_tokens=%d", CLAUDE_MODEL, CLAUDE_MAX_TOKENS
+        )
+        raw_response = _call_claude_api(user_prompt, api_key)
+
+        # ------------------------------------------------------------------
+        # 6. Parse response
+        # ------------------------------------------------------------------
+        figures = _parse_figure_prompts(raw_response)
+        logger.info("Parsed %d figure prompts from Claude response", len(figures))
+
+        # ------------------------------------------------------------------
+        # 7. Persist each figure prompt into the prompts table
+        # ------------------------------------------------------------------
+        prompt_ids: list[str] = []
+        now = datetime.now(UTC)
+
+        for i, fig in enumerate(figures):
+            prompt_id = str(uuid.uuid4())
+            prompt_ids.append(prompt_id)
+
+            db.execute(
+                text(
+                    """
+                    INSERT INTO prompts (
+                        id, project_id, document_id, user_id,
+                        figure_number, title,
+                        original_prompt,
+                        suggested_figure_type,
+                        suggested_aspect_ratio,
+                        generation_status,
+                        claude_model,
+                        created_at, updated_at
+                    ) VALUES (
+                        :id, :project_id, :document_id, :user_id,
+                        :figure_number, :title,
+                        :original_prompt,
+                        :suggested_figure_type,
+                        :suggested_aspect_ratio,
+                        'completed',
+                        :claude_model,
+                        :now, :now
+                    )
+                    """
+                ),
+                {
+                    "id": prompt_id,
+                    "project_id": project_id,
+                    "document_id": document_id,
+                    "user_id": user_id,
+                    "figure_number": fig.get("figure_number", i + 1),
+                    "title": fig.get("title", f"Figure {i + 1}"),
+                    "original_prompt": fig.get("prompt", ""),
+                    "suggested_figure_type": fig.get("figure_type", "overall_framework"),
+                    "suggested_aspect_ratio": fig.get("suggested_aspect_ratio", "16:9"),
+                    "claude_model": CLAUDE_MODEL,
+                    "now": now,
+                },
+            )
+
+        # ------------------------------------------------------------------
+        # 8. Mark document parse_status as completed
+        # ------------------------------------------------------------------
+        db.execute(
+            text(
+                "UPDATE documents SET parse_status = 'completed', "
+                "parse_error = NULL, updated_at = :now WHERE id = :doc_id"
+            ),
+            {"now": now, "doc_id": document_id},
+        )
+        db.commit()
+
+        result = {
+            "document_id": document_id,
+            "prompt_ids": prompt_ids,
+            "figure_count": len(figures),
+        }
+        logger.info(
+            "generate_prompts_task completed | document_id=%s figures=%d",
+            document_id, len(figures),
+        )
+        return result
+
+    except SoftTimeLimitExceeded:
+        logger.error(
+            "generate_prompts_task soft time limit exceeded | document_id=%s", document_id
+        )
+        _mark_document_failed(db, document_id, "Prompt generation timed out (240 s limit).")
+        raise
+
+    except (httpx.HTTPStatusError, httpx.TransportError) as exc:
+        logger.warning(
+            "Transient error in generate_prompts_task | document_id=%s | %s: %s",
+            document_id, type(exc).__name__, exc,
+        )
+        try:
+            countdown = 30 * (2 ** self.request.retries)  # 30s, 60s
+            raise self.retry(exc=exc, countdown=countdown)
+        except MaxRetriesExceededError:
+            _mark_document_failed(
+                db, document_id, f"Claude API error after retries: {exc}"
+            )
+            raise
+
+    except Exception as exc:
+        logger.error(
+            "Unexpected error in generate_prompts_task | document_id=%s\n%s",
+            document_id, traceback.format_exc(),
+        )
+        _mark_document_failed(db, document_id, str(exc))
+        raise
+
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _mark_document_failed(db: Session, document_id: str, reason: str) -> None:
+    """Best-effort status update; swallows errors to avoid masking the original."""
+    try:
+        db.execute(
+            text(
+                "UPDATE documents SET parse_status = 'failed', "
+                "parse_error = :reason, updated_at = :now "
+                "WHERE id = :doc_id"
+            ),
+            {"reason": reason[:2000], "now": datetime.now(UTC), "doc_id": document_id},
+        )
+        db.commit()
+    except Exception:
+        logger.exception("Failed to mark document as failed | document_id=%s", document_id)

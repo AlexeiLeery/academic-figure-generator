@@ -1,0 +1,28 @@
+from datetime import datetime
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict
+
+
+class SectionInfo(BaseModel):
+    index: int
+    title: str
+    level: int
+    content: str
+    page_start: int | None = None
+    page_end: int | None = None
+
+
+class DocumentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    project_id: UUID
+    original_filename: str
+    file_type: str
+    file_size_bytes: int
+    page_count: int | None
+    sections: list[dict] | None
+    parse_status: str
+    parse_error: str | None
+    created_at: datetime

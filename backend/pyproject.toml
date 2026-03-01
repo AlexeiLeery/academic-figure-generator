@@ -1,0 +1,67 @@
+[project]
+name = "academic-figure-generator"
+version = "0.1.0"
+description = "Academic Figure Generator - AI-powered scientific paper illustration service"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    # Web framework
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "python-multipart>=0.0.12",
+    # Database
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30.0",
+    "alembic>=1.14.0",
+    "greenlet>=3.1.0",
+    # Sync PostgreSQL driver (for Celery tasks / scripts)
+    "psycopg[binary]>=3.2.0",
+    # Task queue
+    "celery[redis]>=5.4.0",
+    # Redis
+    "redis>=5.2.0",
+    # HTTP client
+    "httpx>=0.28.0",
+    # Auth
+    "python-jose[cryptography]>=3.3.0",
+    "passlib[bcrypt]>=1.7.4",
+    "bcrypt>=4.2.0",
+    # Document parsing
+    "PyMuPDF>=1.24.0",
+    "python-docx>=1.1.0",
+    # Object storage
+    "minio>=7.2.0",
+    # Rate limiting
+    "slowapi>=0.1.9",
+    # Settings
+    "pydantic-settings>=2.6.0",
+    # Encryption
+    "cryptography>=43.0.0",
+    # SSE
+    "sse-starlette>=2.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "httpx>=0.28.0",
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

@@ -1,0 +1,47 @@
+import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
+
+export interface User {
+    id: number;
+    email: string;
+    display_name: string;
+    is_active?: boolean;
+    is_admin?: boolean;
+    default_color_scheme?: string | null;
+    default_resolution?: string | null;
+    default_aspect_ratio?: string | null;
+    claude_api_key_set?: boolean;
+    nanobanana_api_key_set?: boolean;
+    claude_api_base_url?: string | null;
+    nanobanana_api_base_url?: string | null;
+    claude_tokens_quota?: number;
+    nanobanana_images_quota?: number;
+    created_at?: string;
+}
+
+interface AuthState {
+    token: string | null;
+    refreshToken: string | null;
+    user: User | null;
+    setAuth: (token: string, refreshToken: string, user: User) => void;
+    updateUser: (user: Partial<User>) => void;
+    logout: () => void;
+}
+
+export const useAuthStore = create<AuthState>()(
+    persist(
+        (set) => ({
+            token: null,
+            refreshToken: null,
+            user: null,
+            setAuth: (token, refreshToken, user) => set({ token, refreshToken, user }),
+            updateUser: (updates) => set((state) => ({
+                user: state.user ? { ...state.user, ...updates } : null
+            })),
+            logout: () => set({ token: null, refreshToken: null, user: null }),
+        }),
+        {
+            name: 'auth-storage',
+        }
+    )
+);

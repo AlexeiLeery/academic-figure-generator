@@ -1,0 +1,23 @@
+"""Schemas for admin system settings."""
+
+from pydantic import BaseModel
+
+
+class SystemSettingsResponse(BaseModel):
+    """Response: global system settings (keys masked)."""
+
+    claude_api_key_set: bool = False
+    claude_api_base_url: str | None = None
+    claude_model: str | None = None
+    nanobanana_api_key_set: bool = False
+    nanobanana_api_base_url: str | None = None
+
+
+class SystemSettingsUpdate(BaseModel):
+    """Request body for updating system settings."""
+
+    claude_api_key: str | None = None
+    claude_api_base_url: str | None = None
+    claude_model: str | None = None
+    nanobanana_api_key: str | None = None
+    nanobanana_api_base_url: str | None = None
