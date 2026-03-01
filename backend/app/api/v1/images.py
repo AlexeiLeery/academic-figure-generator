@@ -293,6 +293,7 @@ async def get_image(
     """Get image metadata and a presigned download URL from MinIO."""
     image = await _get_owned_image(image_id, user, db)
 
+    # Backfill: older records may have `.png` hard-coded; keep working regardless.
     download_url: str | None = None
     if image.storage_path:
         try:

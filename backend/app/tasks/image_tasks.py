@@ -198,6 +198,83 @@ def _get_png_dimensions(png_bytes: bytes) -> tuple[int, int]:
     return width, height
 
 
+def _get_jpeg_dimensions(jpeg_bytes: bytes) -> tuple[int, int]:
+    """Parse width/height from a JPEG byte stream (SOF marker)."""
+    if len(jpeg_bytes) < 4 or jpeg_bytes[:2] != b"\xff\xd8":
+        raise ValueError("Response bytes are not a valid JPEG image.")
+
+    i = 2  # after SOI
+    while i + 1 < len(jpeg_bytes):
+        # Find marker 0xFF
+        if jpeg_bytes[i] != 0xFF:
+            i += 1
+            continue
+
+        # Skip fill bytes 0xFF
+        while i < len(jpeg_bytes) and jpeg_bytes[i] == 0xFF:
+            i += 1
+        if i >= len(jpeg_bytes):
+            break
+
+        marker = jpeg_bytes[i]
+        i += 1
+
+        # Standalone markers (no length)
+        if marker in (0xD8, 0xD9):  # SOI, EOI
+            continue
+        if 0xD0 <= marker <= 0xD7:  # RSTn
+            continue
+
+        # Need segment length
+        if i + 1 >= len(jpeg_bytes):
+            break
+        seg_len = (jpeg_bytes[i] << 8) + jpeg_bytes[i + 1]
+        if seg_len < 2:
+            break
+
+        seg_start = i + 2
+        seg_end = seg_start + (seg_len - 2)
+        if seg_end > len(jpeg_bytes):
+            break
+
+        # SOF markers that contain dimensions
+        if marker in (
+            0xC0, 0xC1, 0xC2, 0xC3,
+            0xC5, 0xC6, 0xC7,
+            0xC9, 0xCA, 0xCB,
+            0xCD, 0xCE, 0xCF,
+        ):
+            if seg_start + 7 > len(jpeg_bytes):
+                break
+            height = (jpeg_bytes[seg_start + 1] << 8) + jpeg_bytes[seg_start + 2]
+            width = (jpeg_bytes[seg_start + 3] << 8) + jpeg_bytes[seg_start + 4]
+            return width, height
+
+        i = seg_end
+
+    raise ValueError("Unable to determine JPEG dimensions (no SOF marker found).")
+
+
+def _detect_image(
+    image_bytes: bytes,
+) -> tuple[str, str, int, int]:
+    """Detect image type and dimensions.
+
+    Returns: (ext, mime_type, width_px, height_px)
+    """
+    if len(image_bytes) >= 8 and image_bytes[:8] == b"\x89PNG\r\n\x1a\n":
+        w, h = _get_png_dimensions(image_bytes)
+        return "png", "image/png", w, h
+
+    if len(image_bytes) >= 2 and image_bytes[:2] == b"\xff\xd8":
+        w, h = _get_jpeg_dimensions(image_bytes)
+        return "jpg", "image/jpeg", w, h
+
+    # Best-effort preview to aid debugging (avoid dumping full bytes)
+    head = image_bytes[:16].hex()
+    raise ValueError(f"Unsupported image format (header={head}). Expected PNG or JPEG.")
+
+
 # ---------------------------------------------------------------------------
 # MinIO helpers
 # ---------------------------------------------------------------------------
@@ -217,7 +294,7 @@ def _get_minio_client() -> Minio:
     return _minio_client
 
 
-def _upload_to_minio(image_bytes: bytes, object_name: str) -> str:
+def _upload_to_minio(image_bytes: bytes, object_name: str, content_type: str) -> str:
     """
     Upload bytes to MinIO, creating the bucket if it does not exist.
 
@@ -234,7 +311,7 @@ def _upload_to_minio(image_bytes: bytes, object_name: str) -> str:
         object_name=object_name,
         data=io.BytesIO(image_bytes),
         length=len(image_bytes),
-        content_type="image/png",
+        content_type=content_type,
     )
     return f"{bucket}/{object_name}"
 
@@ -373,17 +450,21 @@ def generate_image_task(
         # 6. Decode base64 PNG
         # ------------------------------------------------------------------
         image_bytes = base64.b64decode(b64_image)
-        actual_width, actual_height = _get_png_dimensions(image_bytes)
+        ext, mime_type, actual_width, actual_height = _detect_image(image_bytes)
         file_size_bytes = len(image_bytes)
         logger.info(
-            "Decoded PNG: %dx%d, %d bytes", actual_width, actual_height, file_size_bytes
+            "Decoded image (%s): %dx%d, %d bytes",
+            mime_type,
+            actual_width,
+            actual_height,
+            file_size_bytes,
         )
 
         # ------------------------------------------------------------------
         # 7. Upload to MinIO
         # ------------------------------------------------------------------
-        object_name = f"figures/{user_id}/{image_id}.png"
-        storage_path = _upload_to_minio(image_bytes, object_name)
+        object_name = f"figures/{user_id}/{image_id}.{ext}"
+        storage_path = _upload_to_minio(image_bytes, object_name, mime_type)
         logger.info("Uploaded to MinIO: %s", storage_path)
 
         # ------------------------------------------------------------------
