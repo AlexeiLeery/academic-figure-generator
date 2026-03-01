@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 
@@ -72,6 +73,18 @@ class Settings(BaseSettings):
 
     # Upload
     MAX_UPLOAD_SIZE_MB: int = 50
+
+    @field_validator("API_V1_PREFIX")
+    @classmethod
+    def _normalize_api_prefix(cls, value: str) -> str:
+        """Normalize API prefix to avoid double slashes like `/api/v1//auth/...`."""
+        prefix = (value or "").strip()
+        if not prefix:
+            return "/api/v1"
+        if not prefix.startswith("/"):
+            prefix = f"/{prefix}"
+        prefix = prefix.rstrip("/")
+        return prefix or "/api/v1"
 
     def get_jwt_secret(self) -> str:
         """Return JWT secret key, falling back to SECRET_KEY if not set."""

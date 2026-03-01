@@ -15,6 +15,7 @@ cd academic-figure-generator
 cp .env.docker.example .env
 
 # 编辑 .env：至少改 POSTGRES_PASSWORD / MINIO_SECRET_KEY / SECRET_KEY / ENCRYPTION_MASTER_KEY
+# 注意：API_V1_PREFIX 建议保持为 `/api/v1`（不要以 `/` 结尾）
 ```
 
 启动：

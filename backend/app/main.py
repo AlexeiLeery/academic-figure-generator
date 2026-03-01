@@ -144,6 +144,7 @@ def _include_routers(app: FastAPI, prefix: str) -> None:
     # Each router module is imported lazily so missing stubs don't block startup.
     router_modules = [
         ("app.api.v1.auth", "router"),
+        ("app.api.v1.health", "router"),
         ("app.api.v1.projects", "router"),
         ("app.api.v1.documents", "router"),
         ("app.api.v1.prompts", "router"),
