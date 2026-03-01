@@ -1,44 +1,72 @@
-import { useState } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Textarea } from '../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
-import { Loader2, Wand2, Image as ImageIcon, Download } from 'lucide-react';
+import { Loader2, Wand2, Image as ImageIcon, Download, AlertCircle } from 'lucide-react';
 import { useAuthStore } from '../store/authStore';
 import { api } from '../lib/api';
 
 export function Generate() {
    const { user } = useAuthStore();
    const [prompt, setPrompt] = useState('');
-   // const [resolution, setResolution] = useState('2K');
    const [aspectRatio, setAspectRatio] = useState('16:9');
    const [isGenerating, setIsGenerating] = useState(false);
+   const [error, setError] = useState<string | null>(null);
    const [resultImage, setResultImage] = useState<{ url: string; status: 'pending' | 'completed' | 'failed' } | null>(null);
+   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+   const stopPolling = useCallback(() => {
+      if (pollTimerRef.current) {
+         clearTimeout(pollTimerRef.current);
+         pollTimerRef.current = null;
+      }
+   }, []);
+
+   const pollStatus = useCallback(async (imageId: string) => {
+      try {
+         const statusRes = await api.get(`/images/${imageId}/status`);
+         const status = statusRes.data.generation_status;
+
+         if (status === 'completed') {
+            const imageRes = await api.get(`/images/${imageId}`);
+            setResultImage({
+               url: imageRes.data.download_url || '',
+               status: 'completed',
+            });
+            setIsGenerating(false);
+         } else if (status === 'failed') {
+            setResultImage({ url: '', status: 'failed' });
+            setError('图片生成失败，请稍后重试');
+            setIsGenerating(false);
+         } else {
+            pollTimerRef.current = setTimeout(() => pollStatus(imageId), 3000);
+         }
+      } catch {
+         setError('查询生成状态失败');
+         setIsGenerating(false);
+      }
+   }, []);
 
    const handleGenerate = async () => {
       if (!prompt.trim() || !user) return;
+      stopPolling();
       setIsGenerating(true);
       setResultImage({ url: '', status: 'pending' });
+      setError(null);
 
       try {
-         // Direct generation without project/document context
-         await api.post('/images/generate-direct', {
+         const response = await api.post('/images/generate-direct', {
             prompt,
-            // resolution,
             aspect_ratio: aspectRatio,
          });
-         // In a real app with SSE, we'd setup a listener here.
-         // Mocking a successful response for now.
-         setTimeout(() => {
-            setResultImage({
-               url: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=2564&auto=format&fit=crop', // Placeholder abstract image
-               status: 'completed'
-            });
-            setIsGenerating(false);
-         }, 5000);
-      } catch (e) {
+
+         const imageId = response.data.id;
+         pollTimerRef.current = setTimeout(() => pollStatus(imageId), 3000);
+      } catch (e: any) {
          console.error(e);
-         setResultImage({ url: '', status: 'failed' });
+         setError(e.response?.data?.detail || '请求失败，请检查网络连接');
+         setResultImage(null);
          setIsGenerating(false);
       }
    };
@@ -49,6 +77,13 @@ export function Generate() {
             <h1 className="text-3xl font-bold tracking-tight">直接生成模式</h1>
             <p className="text-muted-foreground mt-1">跳过文档解析环节，直接输入您的需求即刻生成学术配图。</p>
          </div>
+
+         {error && (
+            <div className="flex items-center gap-2 p-3 rounded-md bg-destructive/10 text-destructive text-sm">
+               <AlertCircle className="h-4 w-4 shrink-0" />
+               <span>{error}</span>
+            </div>
+         )}
 
          <div className="grid md:grid-cols-2 gap-6">
             <div className="space-y-6">
@@ -98,6 +133,11 @@ export function Generate() {
                         </div>
                      ) : resultImage?.status === 'completed' && resultImage.url ? (
                         <img src={resultImage.url} alt="Generated result" className="rounded shadow-md max-h-full max-w-full object-contain" />
+                     ) : resultImage?.status === 'failed' ? (
+                        <div className="text-center">
+                           <AlertCircle className="h-12 w-12 text-destructive/50 mx-auto" />
+                           <p className="text-sm text-destructive mt-4">生成失败，请修改描述后重试</p>
+                        </div>
                      ) : (
                         <div className="text-center">
                            <ImageIcon className="h-12 w-12 text-muted-foreground/50 mx-auto" />
@@ -107,9 +147,11 @@ export function Generate() {
                   </CardContent>
                   {resultImage?.status === 'completed' && resultImage.url && (
                      <CardFooter className="bg-muted/30 pt-4 border-t flex justify-end">
-                        <Button variant="secondary">
-                           <Download className="w-4 h-4 mr-2" />
-                           下载高清原图
+                        <Button variant="secondary" asChild>
+                           <a href={resultImage.url} download="academic-figure.png" target="_blank" rel="noopener noreferrer">
+                              <Download className="w-4 h-4 mr-2" />
+                              下载高清原图
+                           </a>
                         </Button>
                      </CardFooter>
                   )}

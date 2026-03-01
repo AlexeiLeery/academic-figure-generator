@@ -173,14 +173,32 @@ async def generate_image_direct(
 ):
     """Generate an image from custom prompt text (no linked Prompt record).
 
-    A project_id is required since images must belong to a project.
+    If project_id is not provided, a default project is auto-created for the user.
     """
     project_id = data.project_id
 
     if project_id is None:
-        raise BadRequestException("project_id is required for direct image generation")
-
-    await _get_owned_project(project_id, user, db)
+        # Auto-create or reuse a default project for direct generation
+        result = await db.execute(
+            select(Project).where(
+                Project.user_id == user.id,
+                Project.name == "直接生成",
+                Project.status == "active",
+            )
+        )
+        project = result.scalar_one_or_none()
+        if project is None:
+            project = Project(
+                user_id=user.id,
+                name="直接生成",
+                description="通过直接生成模式创建的图片",
+            )
+            db.add(project)
+            await db.flush()
+            await db.refresh(project)
+        project_id = project.id
+    else:
+        await _get_owned_project(project_id, user, db)
 
     image = Image(
         prompt_id=None,

@@ -110,13 +110,15 @@ def _compute_dimensions(resolution: str, aspect_ratio: str) -> tuple[int, int]:
 
 def _build_generation_payload(
     prompt_text: str,
-    width: int,
-    height: int,
+    aspect_ratio: str,
+    image_size: str,
     color_scheme: str,
-    reference_image_path: str | None,
-    edit_instruction: str | None,
 ) -> dict[str, Any]:
-    """Build the NanoBanana API request payload."""
+    """Build the Gemini-style API request payload for NanoBanana.
+
+    Uses the same format as the working ikun skill:
+      POST /v1beta/models/gemini-3-pro-image-preview:generateContent
+    """
     style_prefix = (
         "Academic figure, publication-quality, white background, clean vector style, "
         "no shadows, no 3D effects, professional sans-serif labels, "
@@ -124,29 +126,16 @@ def _build_generation_payload(
     )
     full_prompt = style_prefix + prompt_text
 
-    payload: dict[str, Any] = {
-        "prompt": full_prompt,
-        "width": width,
-        "height": height,
-        "num_inference_steps": 40,
-        "guidance_scale": 7.5,
-        "negative_prompt": (
-            "blurry, photorealistic, dark background, 3D render, "
-            "gradient background, watermark, signature, artistic, "
-            "painterly, sketch, hand-drawn, low quality, noise"
-        ),
-        "output_format": "png",
-        "response_format": "b64_json",
+    return {
+        "contents": [{"parts": [{"text": full_prompt}]}],
+        "generationConfig": {
+            "responseModalities": ["IMAGE"],
+            "imageConfig": {
+                "aspectRatio": aspect_ratio,
+                "image_size": image_size,
+            },
+        },
     }
-
-    if reference_image_path and edit_instruction:
-        payload["mode"] = "edit"
-        payload["edit_instruction"] = edit_instruction
-        payload["reference_image_path"] = reference_image_path
-    else:
-        payload["mode"] = "generate"
-
-    return payload
 
 
 def _call_nanobanana_api(
@@ -155,16 +144,18 @@ def _call_nanobanana_api(
     timeout: float,
 ) -> str:
     """
-    POST to NanoBanana image generation endpoint.
+    POST to NanoBanana Gemini-style image generation endpoint.
 
-    Returns the base64-encoded PNG string from the response.
+    Returns the base64-encoded image string from the response.
     Raises httpx.HTTPStatusError on non-2xx responses.
     """
-    endpoint = f"{NANOBANANA_API_BASE.rstrip('/')}/v1/images/generations"
+    endpoint = (
+        f"{NANOBANANA_API_BASE.rstrip('/')}"
+        "/v1beta/models/gemini-3-pro-image-preview:generateContent"
+    )
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
-        "Accept": "application/json",
     }
 
     with httpx.Client(timeout=timeout) as client:
@@ -172,13 +163,14 @@ def _call_nanobanana_api(
         response.raise_for_status()
         data = response.json()
 
-    images = data.get("data", [])
-    if not images:
-        raise ValueError(f"NanoBanana returned empty data array: {data}")
-
-    b64_image = images[0].get("b64_json")
-    if not b64_image:
-        raise ValueError(f"No b64_json in NanoBanana response: {images[0]}")
+    try:
+        parts = data["candidates"][0]["content"]["parts"]
+        image_part = next(p for p in parts if "inlineData" in p)
+        b64_image = image_part["inlineData"]["data"]
+    except (KeyError, IndexError, StopIteration) as exc:
+        raise ValueError(
+            f"NanoBanana response missing image data: {data}"
+        ) from exc
 
     return b64_image
 
@@ -327,24 +319,17 @@ def generate_image_task(
             logger.info("Using platform NanoBanana key")
 
         # ------------------------------------------------------------------
-        # 3. Compute target dimensions
-        # ------------------------------------------------------------------
-        width, height = _compute_dimensions(resolution, aspect_ratio)
-        logger.info(
-            "Target dimensions: %dx%d (resolution=%s aspect_ratio=%s)",
-            width, height, resolution, aspect_ratio,
-        )
-
-        # ------------------------------------------------------------------
-        # 4. Build API payload
+        # 3. Build API payload (Gemini-style, API handles resolution)
         # ------------------------------------------------------------------
         payload = _build_generation_payload(
             prompt_text=effective_prompt,
-            width=width,
-            height=height,
+            aspect_ratio=aspect_ratio,
+            image_size=resolution,
             color_scheme=color_scheme,
-            reference_image_path=reference_image_path,
-            edit_instruction=edit_instruction,
+        )
+        logger.info(
+            "Built Gemini payload | resolution=%s aspect_ratio=%s",
+            resolution, aspect_ratio,
         )
 
         # ------------------------------------------------------------------
@@ -428,7 +413,7 @@ def generate_image_task(
             {
                 "id": usage_id,
                 "user_id": user_id,
-                "api_endpoint": f"{NANOBANANA_API_BASE}/v1/images/generations",
+                "api_endpoint": f"{NANOBANANA_API_BASE}/v1beta/models/gemini-3-pro-image-preview:generateContent",
                 "resolution": resolution,
                 "aspect_ratio": aspect_ratio,
                 "key_source": key_source,
@@ -555,7 +540,7 @@ def _log_failed_usage(
             {
                 "id": str(uuid.uuid4()),
                 "user_id": user_id,
-                "api_endpoint": f"{NANOBANANA_API_BASE}/v1/images/generations",
+                "api_endpoint": f"{NANOBANANA_API_BASE}/v1beta/models/gemini-3-pro-image-preview:generateContent",
                 "resolution": resolution,
                 "aspect_ratio": aspect_ratio,
                 "key_source": key_source,
