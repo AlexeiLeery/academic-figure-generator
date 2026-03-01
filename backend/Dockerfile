@@ -14,6 +14,7 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 # Install Python deps first (layer cache)
 COPY pyproject.toml .
 COPY README.md .
+COPY app ./app
 RUN uv pip install --system -e "."
 
 COPY . .
