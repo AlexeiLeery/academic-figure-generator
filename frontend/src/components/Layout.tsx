@@ -1,6 +1,6 @@
 import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuthStore } from '../store/authStore';
-import { LogOut, LayoutDashboard, Palette, Activity, Settings, Zap, Shield } from 'lucide-react';
+import { LogOut, LayoutDashboard, Palette, Activity, Settings, Zap, Shield, Users } from 'lucide-react';
 import { Button } from './ui/button';
 
 export function Layout() {
@@ -20,7 +20,10 @@ export function Layout() {
         { name: '用量看板', path: '/usage', icon: Activity },
         { name: '设置', path: '/settings', icon: Settings },
         { name: '快捷生成', path: '/generate', icon: Zap },
-        ...(user?.is_admin ? [{ name: '系统管理', path: '/admin/settings', icon: Shield }] : []),
+        ...(user?.is_admin ? [
+            { name: '系统管理', path: '/admin/settings', icon: Shield },
+            { name: '用户管理', path: '/admin/users', icon: Users },
+        ] : []),
     ];
 
     return (

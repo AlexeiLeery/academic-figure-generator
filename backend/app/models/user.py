@@ -83,12 +83,12 @@ class User(Base, TimestampMixin):
     )
     claude_tokens_quota: Mapped[int] = mapped_column(
         Integer,
-        default=1000000,
+        default=0,
         nullable=False,
     )
     nanobanana_images_quota: Mapped[int] = mapped_column(
         Integer,
-        default=100,
+        default=0,
         nullable=False,
     )
 

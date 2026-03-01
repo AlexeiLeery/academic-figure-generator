@@ -155,6 +155,12 @@ async def generate_image_from_prompt(
     prompt = await _get_owned_prompt(prompt_id, user, db)
     await _ensure_nanobanana_key_available(user, db)
 
+    # Credit check
+    if user.nanobanana_images_quota < 1:
+        raise BadRequestException(
+            "生图额度不足：当前额度为 0，请联系管理员增加额度。"
+        )
+
     if not prompt.active_prompt:
         raise BadRequestException(
             "Prompt has no text. Generate or edit the prompt first."
@@ -191,6 +197,10 @@ async def generate_image_from_prompt(
     # Persist the task id
     image.generation_task_id = task.id
     db.add(image)
+
+    # Deduct 1 credit
+    user.nanobanana_images_quota -= 1
+    db.add(user)
     await db.flush()
 
     return ImageStatusResponse(
@@ -216,6 +226,12 @@ async def generate_image_direct(
     """
     project_id = data.project_id
     await _ensure_nanobanana_key_available(user, db)
+
+    # Credit check
+    if user.nanobanana_images_quota < 1:
+        raise BadRequestException(
+            "生图额度不足：当前额度为 0，请联系管理员增加额度。"
+        )
 
     if project_id is None:
         # Auto-create or reuse a default project for direct generation
@@ -271,6 +287,10 @@ async def generate_image_direct(
 
     image.generation_task_id = task.id
     db.add(image)
+
+    # Deduct 1 credit
+    user.nanobanana_images_quota -= 1
+    db.add(user)
     await db.flush()
 
     return ImageStatusResponse(

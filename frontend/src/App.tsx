@@ -10,6 +10,7 @@ import { Usage } from './pages/Usage';
 import { Settings } from './pages/Settings';
 import { Generate } from './pages/Generate';
 import { AdminSettings } from './pages/AdminSettings';
+import { AdminUsers } from './pages/AdminUsers';
 
 function App() {
   return (
@@ -29,6 +30,7 @@ function App() {
             <Route path="/settings" element={<Settings />} />
             <Route path="/generate" element={<Generate />} />
             <Route path="/admin/settings" element={<AdminSettings />} />
+            <Route path="/admin/users" element={<AdminUsers />} />
           </Route>
         </Route>
       </Routes>
