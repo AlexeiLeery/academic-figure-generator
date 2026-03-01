@@ -25,8 +25,8 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
 
 访问：
-- 本机验证：`http://127.0.0.1:${APP_HTTP_PORT:-8082}/`
-- 对外访问：用你的域名（由总反代转发到 `127.0.0.1:${APP_HTTP_PORT:-8082}`）
+- 直接访问（如果防火墙放行）：`http://<VPS_IP>:${APP_HTTP_PORT:-8082}/`
+- 用域名访问：让你的“总反代”(80/443) 转发到 `http://127.0.0.1:${APP_HTTP_PORT:-8082}`
 
 ## 3) 常用运维
 
