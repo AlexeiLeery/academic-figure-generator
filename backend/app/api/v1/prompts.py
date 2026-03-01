@@ -105,6 +105,8 @@ async def generate_prompts(
             "color_scheme": data.color_scheme,
             "custom_colors": data.custom_colors,
             "figure_types": data.figure_types,
+            "user_request": data.user_request,
+            "max_figures": data.max_figures,
         },
         queue="prompts",
     )

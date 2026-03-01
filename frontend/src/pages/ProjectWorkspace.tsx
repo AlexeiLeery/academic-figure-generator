@@ -12,6 +12,8 @@ import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '../compone
 import { Badge } from '../components/ui/badge';
 import { ScrollArea } from '../components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
+import { Textarea } from '../components/ui/textarea';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 
 type DocumentItem = {
     id: string;
@@ -47,6 +49,9 @@ export function ProjectWorkspace() {
     const [isPreviewing, setIsPreviewing] = useState<Record<string, boolean>>({});
     const [imagePreviews, setImagePreviews] = useState<Record<string, string>>({});
     const previewUrlsRef = useRef<Record<string, string>>({});
+    const [promptMode, setPromptMode] = useState<'overall' | 'sections'>('overall');
+    const [promptRequest, setPromptRequest] = useState('');
+    const [selectedSectionIndices, setSelectedSectionIndices] = useState<number[]>([]);
 
     useEffect(() => {
         if (id && token) {
@@ -77,7 +82,14 @@ export function ProjectWorkspace() {
 
             try {
                 const docsRes = await api.get(`/projects/${projectId}/documents`);
-                setDocuments(docsRes.data || []);
+                const nextDocs = docsRes.data || [];
+                setDocuments(nextDocs);
+                const firstParsed = nextDocs.find(
+                    (d: any) => d.parse_status === 'completed' && Array.isArray(d.sections) && d.sections.length > 0
+                );
+                if (firstParsed?.sections?.length && selectedSectionIndices.length === 0) {
+                    setSelectedSectionIndices(firstParsed.sections.map((_: any, idx: number) => idx));
+                }
             } catch (e) {
                 console.debug('Failed to fetch documents', e);
                 setDocuments([]);
@@ -207,24 +219,47 @@ export function ProjectWorkspace() {
     };
     */
 
-    const handleGeneratePrompt = async () => { // New function for the left panel button
+    const handleGeneratePrompt = async () => {
         if (!id) return;
+
+        const parsedDoc = documents.find((d) => d.parse_status === 'completed' && Array.isArray(d.sections) && d.sections.length > 0);
+        if (!parsedDoc) {
+            alert('请先上传文档并等待解析完成，再生成提示词。');
+            return;
+        }
+
+        if (promptMode === 'sections' && selectedSectionIndices.length === 0) {
+            alert('请至少选择一个章节。');
+            return;
+        }
+
         setIsGeneratingPrompt(true);
         try {
-            // Simulate API call
-            await new Promise(resolve => setTimeout(resolve, 1500));
-            // Add a dummy prompt
-            setPrompts((prev: any[]) => [...prev, {
-                id: `dummy-prompt-${Date.now()}`,
-                title: '新生成的图表',
-                content: '一个关于深度学习模型训练过程的流程图，包含数据预处理、模型构建、训练循环和评估步骤，使用现代扁平化设计风格。',
-                suggested_type: '流程图',
-                status: 'completed',
-                image_count: 0
-            }]);
-            setActiveTab('prompts'); // Switch to prompts tab
-        } catch (err) {
+            const beforeCount = prompts.length;
+            const payload: any = {
+                section_indices: promptMode === 'sections' ? selectedSectionIndices : null,
+                color_scheme: currentProject?.color_scheme || 'okabe-ito',
+                figure_types: promptMode === 'overall' ? ['overall_framework'] : null,
+                user_request: promptRequest.trim() ? promptRequest.trim() : null,
+                max_figures: promptMode === 'overall' ? 1 : null,
+            };
+
+            await api.post(`/projects/${id}/prompts/generate`, payload);
+            setActiveTab('prompts');
+
+            // Poll prompt list until new prompts appear (simple UX)
+            const deadline = Date.now() + 90_000; // 90s
+            while (Date.now() < deadline) {
+                await new Promise((r) => setTimeout(r, 2000));
+                const promptsRes = await api.get(`/projects/${id}/prompts`);
+                const next = promptsRes.data || [];
+                setPrompts(next);
+                if (next.length > beforeCount) break;
+            }
+        } catch (err: any) {
             console.error('Failed to generate prompt', err);
+            const detail = err?.response?.data?.detail;
+            alert(detail ? `生成提示词失败：${detail}` : '生成提示词失败，请稍后重试。');
         } finally {
             setIsGeneratingPrompt(false);
         }
@@ -234,24 +269,14 @@ export function ProjectWorkspace() {
         if (!id) return;
         try {
             await api.post(`/prompts/${promptId}/images/generate`, {
-                resolution: "4K",
-                aspect_ratio: "16:9"
+                resolution: "2K",
+                aspect_ratio: "16:9",
             });
-            // Start polling or SSE
-            fetchProjectData(id);
+            await fetchProjectData(id);
+            setActiveTab('images');
         } catch (err) {
             console.error('Failed to generate image', err);
-        } finally {
-            // Simulate image generation
-            setTimeout(() => {
-                setImages((prev: any[]) => [...prev, {
-                    id: `dummy-image-${Date.now()}`,
-                    url: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?q=80&w=2564&auto=format&fit=crop', // Dummy image URL
-                    status: 'completed',
-                    resolution: '1280x720'
-                }]);
-                setActiveTab('images'); // Switch to images tab
-            }, 2000);
+            alert('生成图像失败，请稍后重试。');
         }
     };
 
@@ -270,6 +295,32 @@ export function ProjectWorkspace() {
                     </CardTitle>
                 </CardHeader>
                 <CardContent className="flex-1 overflow-hidden p-0 flex flex-col">
+
+                    {/* Prompt intent */}
+                    <div className="p-4 border-b bg-background">
+                        <div className="text-sm font-medium text-muted-foreground mb-2">你想生成什么图？（可选）</div>
+                        <Textarea
+                            value={promptRequest}
+                            onChange={(e) => setPromptRequest(e.target.value)}
+                            placeholder="例如：只生成一张整体架构图（包含输入、编码器、融合模块、输出），突出本文主要贡献点。"
+                            className="min-h-[90px]"
+                        />
+                        <div className="flex items-center justify-between gap-2 mt-3">
+                            <div className="text-sm font-medium text-muted-foreground">生成方式</div>
+                            <Select value={promptMode} onValueChange={(v) => setPromptMode(v as any)}>
+                                <SelectTrigger className="w-[180px]">
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="overall">整体架构图（1条）</SelectItem>
+                                    <SelectItem value="sections">按章节生成（多条）</SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-2">
+                            “整体架构图”只生成 1 条提示词；“按章节生成”会基于所选章节生成多条提示词。
+                        </p>
+                    </div>
 
                     {/* Upload Area */}
                     <div className="p-4 border-b">
@@ -328,7 +379,21 @@ export function ProjectWorkspace() {
                                     <div className="space-y-2">
                                         {(parsedDoc.sections || []).map((sec, idx) => (
                                             <div key={idx} className="flex items-start space-x-2 p-3 bg-muted/40 rounded border">
-                                                <input type="checkbox" className="mt-1" defaultChecked />
+                                                <input
+                                                    type="checkbox"
+                                                    className="mt-1"
+                                                    checked={selectedSectionIndices.includes(idx)}
+                                                    disabled={promptMode !== 'sections'}
+                                                    onChange={(e) => {
+                                                        const checked = e.target.checked;
+                                                        setSelectedSectionIndices((prev) => {
+                                                            const set = new Set(prev);
+                                                            if (checked) set.add(idx);
+                                                            else set.delete(idx);
+                                                            return Array.from(set).sort((a, b) => a - b);
+                                                        });
+                                                    }}
+                                                />
                                                 <div className="min-w-0">
                                                     <p className="text-sm font-medium leading-none truncate">{sec.title || `Section ${idx + 1}`}</p>
                                                     {sec.content && (
@@ -377,13 +442,15 @@ export function ProjectWorkspace() {
                                             <Card key={prompt.id}>
                                                 <CardHeader className="pb-2">
                                                     <div className="flex justify-between">
-                                                        <CardTitle className="text-lg">图表: {prompt.title}</CardTitle>
-                                                        <Badge>{prompt.suggested_type}</Badge>
+                                                        <CardTitle className="text-lg">
+                                                            图表: {prompt.title || `Figure ${prompt.figure_number ?? ''}`}
+                                                        </CardTitle>
+                                                        <Badge>{prompt.suggested_figure_type || '未分类'}</Badge>
                                                     </div>
                                                 </CardHeader>
                                                 <CardContent>
                                                     <p className="text-sm text-muted-foreground font-mono bg-muted p-3 rounded-md max-h-32 overflow-y-auto">
-                                                        {prompt.content}
+                                                        {prompt.active_prompt || prompt.original_prompt || ''}
                                                     </p>
                                                 </CardContent>
                                                 <CardFooter className="justify-end pt-0 mt-4 border-t pt-4">

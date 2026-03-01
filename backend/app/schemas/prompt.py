@@ -9,6 +9,8 @@ class PromptGenerateRequest(BaseModel):
     color_scheme: str = "okabe-ito"
     custom_colors: dict | None = None
     figure_types: list[str] | None = None
+    user_request: str | None = None
+    max_figures: int | None = None
 
 
 class PromptResponse(BaseModel):
