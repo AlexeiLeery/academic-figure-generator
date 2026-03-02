@@ -56,6 +56,7 @@ export function ProjectWorkspace() {
     const [promptMode, setPromptMode] = useState<'overall' | 'sections'>('overall');
     const [promptRequest, setPromptRequest] = useState('');
     const [selectedSectionIndices, setSelectedSectionIndices] = useState<number[]>([]);
+    const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
 
     // Per-image features
     const [colorSchemes, setColorSchemes] = useState<any[]>([]);
@@ -428,32 +429,192 @@ export function ProjectWorkspace() {
                                 const parsedDoc = documents.find((d) => d.parse_status === 'completed' && Array.isArray(d.sections) && d.sections.length > 0);
                                 if (!parsedDoc) return <div className="text-sm text-muted-foreground">上传文档并等待解析完成后，这里会显示章节结构。</div>;
 
+                                const sections = parsedDoc.sections || [];
+
+                                const getGroupKeyAndTitle = (rawTitle: string | undefined | null) => {
+                                    const title = (rawTitle || '').trim();
+                                    if (!title) return null;
+
+                                    // Chinese chapters: 第X章 / 第X节 / 第X部分
+                                    const cn = title.match(/^第\s*([0-9一二三四五六七八九十百千]+)\s*章\s*[:：]?\s*(.*)$/);
+                                    if (cn) {
+                                        const idx = cn[1];
+                                        const rest = (cn[2] || '').trim();
+                                        return { key: `chapter-${idx}`, title: rest ? `第${idx}章：${rest}` : `第${idx}章` };
+                                    }
+
+                                    // English chapters
+                                    const en = title.match(/^chapter\s+(\d+)\b\s*[:：-]?\s*(.*)$/i);
+                                    if (en) {
+                                        const idx = en[1];
+                                        const rest = (en[2] || '').trim();
+                                        return { key: `chapter-${idx}`, title: rest ? `Chapter ${idx}: ${rest}` : `Chapter ${idx}` };
+                                    }
+
+                                    // Common standalone headings treated as their own group
+                                    if (/^(摘要|abstract|引言|introduction|结论|conclusion|参考文献|references)\b/i.test(title)) {
+                                        return { key: `section-${title.toLowerCase()}`, title };
+                                    }
+
+                                    return null;
+                                };
+
+                                type Group = {
+                                    key: string;
+                                    title: string;
+                                    items: Array<{ idx: number; title: string; preview: string }>;
+                                };
+
+                                const groups: Group[] = [];
+                                let current: Group | null = null;
+
+                                sections.forEach((sec: any, idx: number) => {
+                                    const groupInfo = getGroupKeyAndTitle(sec?.title);
+                                    if (groupInfo) {
+                                        current = groups.find((g) => g.key === groupInfo.key) || null;
+                                        if (!current) {
+                                            current = { key: groupInfo.key, title: groupInfo.title, items: [] };
+                                            groups.push(current);
+                                        }
+                                    }
+                                    if (!current) {
+                                        current = groups.find((g) => g.key === 'misc') || null;
+                                        if (!current) {
+                                            current = { key: 'misc', title: '其他', items: [] };
+                                            groups.push(current);
+                                        }
+                                    }
+
+                                    const previewText = (sec?.content || sec?.text || '').toString().trim();
+                                    current.items.push({
+                                        idx,
+                                        title: (sec?.title || `Section ${idx + 1}`).toString(),
+                                        preview: previewText,
+                                    });
+                                });
+
+                                const allIndices = sections.map((_, idx) => idx);
+                                const selectedSet = new Set(selectedSectionIndices);
+
+                                const selectMany = (indices: number[], checked: boolean) => {
+                                    setSelectedSectionIndices((prev) => {
+                                        const set = new Set(prev);
+                                        for (const i of indices) {
+                                            if (checked) set.add(i);
+                                            else set.delete(i);
+                                        }
+                                        return Array.from(set).sort((a, b) => a - b);
+                                    });
+                                };
+
                                 return (
                                     <div className="space-y-2">
-                                        {(parsedDoc.sections || []).map((sec, idx) => (
-                                            <div key={idx} className="flex items-start space-x-2 p-3 bg-muted/40 rounded border">
-                                                <input
-                                                    type="checkbox"
-                                                    className="mt-1"
-                                                    checked={selectedSectionIndices.includes(idx)}
-                                                    onChange={(e) => {
-                                                        const checked = e.target.checked;
-                                                        setSelectedSectionIndices((prev) => {
-                                                            const set = new Set(prev);
-                                                            if (checked) set.add(idx);
-                                                            else set.delete(idx);
-                                                            return Array.from(set).sort((a, b) => a - b);
-                                                        });
-                                                    }}
-                                                />
-                                                <div className="min-w-0">
-                                                    <p className="text-sm font-medium leading-none truncate">{sec.title || `Section ${idx + 1}`}</p>
-                                                    {sec.content && (
-                                                        <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{sec.content}</p>
-                                                    )}
-                                                </div>
+                                        <div className="flex items-center justify-between gap-2 mb-2">
+                                            <div className="text-xs text-muted-foreground">
+                                                已选择 {selectedSectionIndices.length}/{sections.length} 段
                                             </div>
-                                        ))}
+                                            <div className="flex items-center gap-2">
+                                                <Button
+                                                    variant="outline"
+                                                    size="sm"
+                                                    onClick={() => selectMany(allIndices, true)}
+                                                >
+                                                    全选
+                                                </Button>
+                                                <Button
+                                                    variant="outline"
+                                                    size="sm"
+                                                    onClick={() => selectMany(allIndices, false)}
+                                                >
+                                                    全不选
+                                                </Button>
+                                                <Button
+                                                    variant="outline"
+                                                    size="sm"
+                                                    onClick={() => {
+                                                        const next: Record<string, boolean> = {};
+                                                        for (const g of groups) next[g.key] = false;
+                                                        setCollapsedGroups(next);
+                                                    }}
+                                                >
+                                                    展开全部
+                                                </Button>
+                                                <Button
+                                                    variant="outline"
+                                                    size="sm"
+                                                    onClick={() => {
+                                                        const next: Record<string, boolean> = {};
+                                                        for (const g of groups) next[g.key] = true;
+                                                        setCollapsedGroups(next);
+                                                    }}
+                                                >
+                                                    折叠全部
+                                                </Button>
+                                            </div>
+                                        </div>
+
+                                        <div className="space-y-2">
+                                            {groups.map((g) => {
+                                                const indices = g.items.map((it) => it.idx);
+                                                const selectedCount = indices.reduce((acc, i) => acc + (selectedSet.has(i) ? 1 : 0), 0);
+                                                const allChecked = selectedCount === indices.length && indices.length > 0;
+                                                const partiallyChecked = selectedCount > 0 && selectedCount < indices.length;
+                                                const isCollapsed = collapsedGroups[g.key] ?? false;
+
+                                                return (
+                                                    <details
+                                                        key={g.key}
+                                                        open={!isCollapsed}
+                                                        className="rounded border bg-muted/20"
+                                                        onToggle={(e) => {
+                                                            const open = (e.currentTarget as HTMLDetailsElement).open;
+                                                            setCollapsedGroups((prev) => ({ ...prev, [g.key]: !open }));
+                                                        }}
+                                                    >
+                                                        <summary className="cursor-pointer select-none list-none px-3 py-2 flex items-center justify-between">
+                                                            <div className="flex items-center gap-2 min-w-0">
+                                                                <input
+                                                                    type="checkbox"
+                                                                    className="mt-0.5"
+                                                                    checked={allChecked}
+                                                                    ref={(el) => {
+                                                                        if (el) el.indeterminate = partiallyChecked;
+                                                                    }}
+                                                                    onClick={(e) => e.stopPropagation()}
+                                                                    onChange={(e) => selectMany(indices, e.target.checked)}
+                                                                />
+                                                                <div className="min-w-0">
+                                                                    <div className="text-sm font-medium truncate">{g.title}</div>
+                                                                    <div className="text-xs text-muted-foreground">
+                                                                        {selectedCount}/{indices.length} 已选
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                            <Badge variant="secondary">{indices.length}</Badge>
+                                                        </summary>
+
+                                                        <div className="px-3 pb-3 space-y-2">
+                                                            {g.items.map((it) => (
+                                                                <div key={it.idx} className="flex items-start space-x-2 p-3 bg-background/60 rounded border">
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        className="mt-1"
+                                                                        checked={selectedSet.has(it.idx)}
+                                                                        onChange={(e) => selectMany([it.idx], e.target.checked)}
+                                                                    />
+                                                                    <div className="min-w-0">
+                                                                        <p className="text-sm font-medium leading-none truncate">{it.title}</p>
+                                                                        {it.preview && (
+                                                                            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{it.preview}</p>
+                                                                        )}
+                                                                    </div>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </details>
+                                                );
+                                            })}
+                                        </div>
                                     </div>
                                 );
                             })()}
