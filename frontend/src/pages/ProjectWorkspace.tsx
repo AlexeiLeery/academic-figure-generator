@@ -37,7 +37,8 @@ export function ProjectWorkspace() {
     const { currentProject, setCurrentProject } = useProjectStore();
     const token = useAuthStore((s) => s.token);
 
-    const [isLoading, setIsLoading] = useState(true);
+    const [isInitialLoading, setIsInitialLoading] = useState(true);
+    const [isRefreshing, setIsRefreshing] = useState(false);
     const [documents, setDocuments] = useState<DocumentItem[]>([]);
     const [prompts, setPrompts] = useState<any[]>([]);
     const [images, setImages] = useState<any[]>([]);
@@ -88,7 +89,7 @@ export function ProjectWorkspace() {
 
     useEffect(() => {
         if (id && token) {
-            fetchProjectData(id);
+            fetchProjectData(id, { showLoader: true });
         }
         return () => setCurrentProject(null);
     }, [id, token]);
@@ -106,12 +107,14 @@ export function ProjectWorkspace() {
     useEffect(() => {
         const hasProcessing = images.some(img => img.generation_status === 'processing');
         if (!hasProcessing || !id) return;
-        const interval = setInterval(() => { fetchProjectData(id); }, 5000);
+        const interval = setInterval(() => { fetchProjectData(id, { showLoader: false }); }, 5000);
         return () => clearInterval(interval);
     }, [images, id]);
 
-    const fetchProjectData = async (projectId: string) => {
-        setIsLoading(true);
+    const fetchProjectData = async (projectId: string, opts?: { showLoader?: boolean }) => {
+        const showLoader = opts?.showLoader ?? false;
+        if (showLoader) setIsInitialLoading(true);
+        else setIsRefreshing(true);
         try {
             const projRes = await api.get(`/projects/${projectId}`);
             setCurrentProject(projRes.data);
@@ -156,7 +159,8 @@ export function ProjectWorkspace() {
             console.error(err);
             navigate('/projects');
         } finally {
-            setIsLoading(false);
+            if (showLoader) setIsInitialLoading(false);
+            else setIsRefreshing(false);
         }
     };
 
@@ -278,7 +282,7 @@ export function ProjectWorkspace() {
             }
 
             // Refresh to pick up image records
-            await fetchProjectData(id);
+            await fetchProjectData(id, { showLoader: false });
         } catch (err: any) {
             console.error('Failed to auto-generate', err);
             const detail = err?.response?.data?.detail;
@@ -298,7 +302,7 @@ export function ProjectWorkspace() {
                 aspect_ratio: settings.aspectRatio,
                 color_scheme: settings.colorScheme,
             });
-            await fetchProjectData(id);
+            await fetchProjectData(id, { showLoader: false });
         } catch (err) {
             console.error('Failed to generate image', err);
             alert('生成图像失败，请稍后重试。');
@@ -316,7 +320,7 @@ export function ProjectWorkspace() {
             formData.append('edit_instruction', instruction);
             await api.post(`/images/${imageId}/edit`, formData);
             setEditInstructions(prev => ({ ...prev, [imageId]: '' }));
-            await fetchProjectData(id);
+            await fetchProjectData(id, { showLoader: false });
         } catch (err: any) {
             console.error('Edit image failed', err);
             const detail = err?.response?.data?.detail;
@@ -326,7 +330,7 @@ export function ProjectWorkspace() {
         }
     };
 
-    if (isLoading) return <div className="p-8">加载中...</div>;
+    if (isInitialLoading && !currentProject) return <div className="p-8">加载中...</div>;
     if (!currentProject) return <div className="p-8">找不到该项目...</div>;
 
     const renderParsedStructure = () => {
@@ -688,6 +692,7 @@ export function ProjectWorkspace() {
                 <div className="bg-muted/30 border-b py-4 px-6 flex items-center">
                     <ImageIcon className="w-5 h-5 mr-2 text-primary" />
                     <h3 className="text-lg font-semibold">配图生成</h3>
+                    {isRefreshing && <RefreshCw className="w-4 h-4 ml-3 animate-spin text-muted-foreground" />}
                 </div>
                 <ScrollArea className="flex-1">
                     <div className="p-4">
