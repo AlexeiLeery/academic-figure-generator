@@ -13,6 +13,7 @@ interface SystemSettings {
     claude_model: string | null;
     nanobanana_api_key_set: boolean;
     nanobanana_api_base_url: string | null;
+    nanobanana_model: string | null;
     image_price_cny: number | null;
     usd_cny_rate: number | null;
     claude_input_usd_per_million: number | null;
@@ -31,6 +32,7 @@ export function AdminSettings() {
         claude_model: null,
         nanobanana_api_key_set: false,
         nanobanana_api_base_url: null,
+        nanobanana_model: null,
         image_price_cny: null,
         usd_cny_rate: null,
         claude_input_usd_per_million: null,
@@ -43,6 +45,7 @@ export function AdminSettings() {
         claude_model: '',
         nanobanana_api_key: '',
         nanobanana_api_base_url: '',
+        nanobanana_model: '',
         image_price_cny: '',
         usd_cny_rate: '',
         claude_input_usd_per_million: '',
@@ -64,6 +67,7 @@ export function AdminSettings() {
                 claude_api_base_url: data.claude_api_base_url || '',
                 claude_model: data.claude_model || '',
                 nanobanana_api_base_url: data.nanobanana_api_base_url || '',
+                nanobanana_model: data.nanobanana_model || '',
                 image_price_cny: data.image_price_cny != null ? String(data.image_price_cny) : '',
                 usd_cny_rate: data.usd_cny_rate != null ? String(data.usd_cny_rate) : '',
                 claude_input_usd_per_million: data.claude_input_usd_per_million != null ? String(data.claude_input_usd_per_million) : '',
@@ -89,6 +93,7 @@ export function AdminSettings() {
 
             if (formData.nanobanana_api_key) payload.nanobanana_api_key = formData.nanobanana_api_key;
             payload.nanobanana_api_base_url = formData.nanobanana_api_base_url || null;
+            payload.nanobanana_model = formData.nanobanana_model || null;
 
             if (formData.image_price_cny !== '') payload.image_price_cny = parseFloat(formData.image_price_cny);
             if (formData.usd_cny_rate !== '') payload.usd_cny_rate = parseFloat(formData.usd_cny_rate);
@@ -220,6 +225,16 @@ export function AdminSettings() {
                             onChange={e => setFormData({ ...formData, nanobanana_api_base_url: e.target.value })}
                         />
                         <p className="text-xs text-muted-foreground">如果使用代理或中转服务，请填写完整的 API 基础地址。</p>
+                    </div>
+                    <div className="space-y-2">
+                        <Label htmlFor="sys_nb_model">NanoBanana 模型名称</Label>
+                        <Input
+                            id="sys_nb_model"
+                            placeholder="gemini-3-pro-image-preview （留空使用默认）"
+                            value={formData.nanobanana_model}
+                            onChange={e => setFormData({ ...formData, nanobanana_model: e.target.value })}
+                        />
+                        <p className="text-xs text-muted-foreground">用于拼接请求路径：`/v1beta/models/&lt;model&gt;:generateContent`。</p>
                     </div>
                 </CardContent>
                 <CardFooter className="flex justify-between border-t bg-muted/40 p-4">

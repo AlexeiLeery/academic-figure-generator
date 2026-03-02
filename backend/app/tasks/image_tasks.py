@@ -62,6 +62,7 @@ NANOBANANA_API_BASE: str = os.environ.get(
     "NANOBANANA_API_BASE", "https://api.ikuncode.cc"
 )
 NANOBANANA_API_KEY: str = os.environ.get("NANOBANANA_API_KEY", "")
+NANOBANANA_MODEL: str = os.environ.get("NANOBANANA_MODEL", "gemini-3-pro-image-preview")
 
 # Resolution bucket → (soft_limit_s, hard_limit_s)
 RESOLUTION_TIMEOUTS: dict[str, tuple[int, int]] = {
@@ -156,6 +157,7 @@ def _call_nanobanana_api(
     api_key: str,
     timeout: float,
     api_base_url: str,
+    model: str,
 ) -> str:
     """
     POST to NanoBanana Gemini-style image generation endpoint.
@@ -163,10 +165,8 @@ def _call_nanobanana_api(
     Returns the base64-encoded image string from the response.
     Raises httpx.HTTPStatusError on non-2xx responses.
     """
-    endpoint = (
-        f"{api_base_url.rstrip('/')}"
-        "/v1beta/models/gemini-3-pro-image-preview:generateContent"
-    )
+    model_id = (model or "gemini-3-pro-image-preview").strip()
+    endpoint = f"{api_base_url.rstrip('/')}/v1beta/models/{model_id}:generateContent"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -189,17 +189,17 @@ def _call_nanobanana_api(
     return b64_image
 
 
-def _get_system_nanobanana_settings(db: Session) -> tuple[str | None, str | None]:
-    """Fetch system NanoBanana settings (encrypted key + base URL) from DB."""
+def _get_system_nanobanana_settings(db: Session) -> tuple[str | None, str | None, str | None]:
+    """Fetch system NanoBanana settings (encrypted key + base URL + model) from DB."""
     row = db.execute(
         text(
-            "SELECT nanobanana_api_key_enc, nanobanana_api_base_url "
+            "SELECT nanobanana_api_key_enc, nanobanana_api_base_url, nanobanana_model "
             "FROM system_settings WHERE id = 1"
         )
     ).fetchone()
     if not row:
-        return None, None
-    return row[0], row[1]
+        return None, None, None
+    return row[0], row[1], row[2]
 
 
 def _get_png_dimensions(png_bytes: bytes) -> tuple[int, int]:
@@ -408,8 +408,9 @@ def generate_image_task(
         )
         byok_row = byok_result.fetchone()
         encrypted_key = byok_row[0] if byok_row else None
-        system_key_enc, system_api_base_url = _get_system_nanobanana_settings(db)
+        system_key_enc, system_api_base_url, system_model = _get_system_nanobanana_settings(db)
         effective_api_base_url = system_api_base_url or NANOBANANA_API_BASE
+        effective_model = (system_model or NANOBANANA_MODEL or "gemini-3-pro-image-preview").strip()
 
         if encrypted_key:
             api_key = decrypt_api_key(encrypted_key)
@@ -457,6 +458,7 @@ def generate_image_task(
             api_key,
             timeout=api_timeout,
             api_base_url=effective_api_base_url,
+            model=effective_model,
         )
 
         # ------------------------------------------------------------------
@@ -520,6 +522,7 @@ def generate_image_task(
         estimated_cost_usd = cny_to_usd(estimated_cost_cny, usd_cny_rate)
 
         usage_id = str(uuid.uuid4())
+        api_endpoint = f"{effective_api_base_url.rstrip('/')}/v1beta/models/{effective_model}:generateContent"
         db.execute(
             text(
                 """
@@ -541,7 +544,7 @@ def generate_image_task(
             {
                 "id": usage_id,
                 "user_id": user_id,
-                "api_endpoint": f"{NANOBANANA_API_BASE}/v1beta/models/gemini-3-pro-image-preview:generateContent",
+                "api_endpoint": api_endpoint,
                 "resolution": resolution,
                 "aspect_ratio": aspect_ratio,
                 "estimated_cost_usd": estimated_cost_usd,
@@ -582,8 +585,13 @@ def generate_image_task(
         logger.warning(
             "HTTP error from NanoBanana | image_id=%s status=%d", image_id, status_code
         )
+        api_endpoint = (
+            f"{effective_api_base_url.rstrip('/')}/v1beta/models/{effective_model}:generateContent"
+            if "effective_api_base_url" in locals() and "effective_model" in locals()
+            else None
+        )
         _log_failed_usage(db, user_id, resolution, aspect_ratio, key_source,
-                          billing_period, status_code, str(exc))
+                          billing_period, status_code, str(exc), api_endpoint=api_endpoint)
         if status_code == 429 or status_code >= 500:
             try:
                 countdown = 60 * (2 ** self.request.retries)  # 60s, 120s, 240s
@@ -600,8 +608,13 @@ def generate_image_task(
 
     except httpx.TransportError as exc:
         logger.warning("Transport error | image_id=%s | %s", image_id, exc)
+        api_endpoint = (
+            f"{effective_api_base_url.rstrip('/')}/v1beta/models/{effective_model}:generateContent"
+            if "effective_api_base_url" in locals() and "effective_model" in locals()
+            else None
+        )
         _log_failed_usage(db, user_id, resolution, aspect_ratio, key_source,
-                          billing_period, None, str(exc))
+                          billing_period, None, str(exc), api_endpoint=api_endpoint)
         try:
             countdown = 60 * (2 ** self.request.retries)
             raise self.retry(exc=exc, countdown=countdown)
@@ -658,6 +671,7 @@ def _log_failed_usage(
     billing_period: str,
     status_code: int | None,
     error_message: str,
+    api_endpoint: str | None = None,
 ) -> None:
     """Best-effort usage log entry for failed requests."""
     try:
@@ -682,7 +696,7 @@ def _log_failed_usage(
             {
                 "id": str(uuid.uuid4()),
                 "user_id": user_id,
-                "api_endpoint": f"{NANOBANANA_API_BASE}/v1beta/models/gemini-3-pro-image-preview:generateContent",
+                "api_endpoint": (api_endpoint or f"{NANOBANANA_API_BASE}/v1beta/models/{NANOBANANA_MODEL}:generateContent")[:200],
                 "resolution": resolution,
                 "aspect_ratio": aspect_ratio,
                 "estimated_cost_usd": Decimal("0"),

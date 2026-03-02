@@ -11,6 +11,7 @@ class SystemSettingsResponse(BaseModel):
     claude_model: str | None = None
     nanobanana_api_key_set: bool = False
     nanobanana_api_base_url: str | None = None
+    nanobanana_model: str | None = None
     image_price_cny: float | None = None
     usd_cny_rate: float | None = None
     claude_input_usd_per_million: float | None = None
@@ -25,6 +26,7 @@ class SystemSettingsUpdate(BaseModel):
     claude_model: str | None = None
     nanobanana_api_key: str | None = None
     nanobanana_api_base_url: str | None = None
+    nanobanana_model: str | None = None
     image_price_cny: float | None = None
     usd_cny_rate: float | None = None
     claude_input_usd_per_million: float | None = None

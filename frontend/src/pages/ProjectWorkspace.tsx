@@ -267,24 +267,14 @@ export function ProjectWorkspace() {
                 }
             }
 
-            // Auto-trigger image generation for each new prompt
+            // Initialize per-prompt default settings so selectors have values
             for (const prompt of newPrompts) {
                 const aspectRatio = prompt.suggested_aspect_ratio || '16:9';
                 const cs = currentProject?.color_scheme || 'okabe-ito';
-                // Initialize per-prompt settings
                 setPromptSettings(prev => ({
                     ...prev,
                     [prompt.id]: { resolution: '2K', aspectRatio, colorScheme: cs },
                 }));
-                try {
-                    await api.post(`/prompts/${prompt.id}/images/generate`, {
-                        resolution: '2K',
-                        aspect_ratio: aspectRatio,
-                        color_scheme: cs,
-                    });
-                } catch (err) {
-                    console.error('Auto image generation failed for prompt', prompt.id, err);
-                }
             }
 
             // Refresh to pick up image records

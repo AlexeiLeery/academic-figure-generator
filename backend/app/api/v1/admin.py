@@ -56,6 +56,7 @@ def _settings_to_response(s: SystemSettings) -> SystemSettingsResponse:
         claude_model=s.claude_model,
         nanobanana_api_key_set=s.nanobanana_api_key_enc is not None,
         nanobanana_api_base_url=s.nanobanana_api_base_url,
+        nanobanana_model=s.nanobanana_model,
         image_price_cny=float(s.image_price_cny),
         usd_cny_rate=float(s.usd_cny_rate),
         claude_input_usd_per_million=float(s.claude_input_usd_per_million),

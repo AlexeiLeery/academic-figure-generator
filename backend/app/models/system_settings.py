@@ -47,6 +47,12 @@ class SystemSettings(Base, TimestampMixin):
         nullable=True,
         comment="Custom NanoBanana API base URL",
     )
+    nanobanana_model: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        default="gemini-3-pro-image-preview",
+        comment="NanoBanana model id (e.g. gemini-3-pro-image-preview)",
+    )
 
     # Billing / Pricing
     image_price_cny: Mapped[Decimal] = mapped_column(
