@@ -159,29 +159,36 @@ export function Login() {
                         </div>
                     )}
 
-                    {/* OAuth configured: show Linux DO login button */}
-                    {oauthConfigured === true && (
-                        <div className="space-y-5">
-                            <Button
-                                onClick={handleLinuxDOLogin}
-                                className="w-full h-12 rounded-xl text-sm font-semibold tracking-wide transition-all duration-200 flex items-center justify-center gap-3"
-                                style={{
-                                    background: '#111827',
-                                    color: '#ffffff',
-                                    border: 'none',
-                                }}
-                            >
-                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z" fill="currentColor"/>
-                                </svg>
-                                使用 Linux DO 登录
-                            </Button>
-                        </div>
-                    )}
-
-                    {/* OAuth NOT configured: show email/password form for admin bootstrap */}
-                    {oauthConfigured === false && (
+                    {oauthConfigured !== null && (
                         <>
+                            {/* OAuth configured: show Linux DO login button */}
+                            {oauthConfigured && (
+                                <div className="space-y-5">
+                                    <Button
+                                        onClick={handleLinuxDOLogin}
+                                        className="w-full h-12 rounded-xl text-sm font-semibold tracking-wide transition-all duration-200 flex items-center justify-center gap-3"
+                                        style={{
+                                            background: '#111827',
+                                            color: '#ffffff',
+                                            border: 'none',
+                                        }}
+                                    >
+                                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z" fill="currentColor"/>
+                                        </svg>
+                                        使用 Linux DO 登录
+                                    </Button>
+
+                                    {/* Divider */}
+                                    <div className="flex items-center gap-3">
+                                        <div className="flex-1 h-px bg-gray-100" />
+                                        <span className="text-xs text-gray-400">管理员入口</span>
+                                        <div className="flex-1 h-px bg-gray-100" />
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Email/password form (always shown) */}
                             <form onSubmit={handleLogin} className="space-y-5">
                                 <div className="space-y-1.5">
                                     <Label
@@ -224,15 +231,15 @@ export function Login() {
                                     disabled={isLoading}
                                     className="w-full h-11 rounded-xl text-sm font-semibold tracking-wide transition-all duration-200"
                                     style={{
-                                        background: isLoading ? '#374151' : '#111827',
-                                        color: '#ffffff',
-                                        border: 'none',
+                                        background: isLoading ? '#374151' : (oauthConfigured ? '#f3f4f6' : '#111827'),
+                                        color: oauthConfigured ? '#374151' : '#ffffff',
+                                        border: oauthConfigured ? '1px solid #e5e7eb' : 'none',
                                     }}
                                 >
                                     {isLoading ? (
                                         <span className="flex items-center justify-center gap-2">
                                             <svg
-                                                className="animate-spin h-4 w-4 text-white"
+                                                className="animate-spin h-4 w-4"
                                                 xmlns="http://www.w3.org/2000/svg"
                                                 fill="none"
                                                 viewBox="0 0 24 24"
@@ -243,14 +250,16 @@ export function Login() {
                                             登录中...
                                         </span>
                                     ) : (
-                                        '管理员登录'
+                                        oauthConfigured ? '管理员密码登录' : '登 录'
                                     )}
                                 </Button>
                             </form>
 
-                            <p className="mt-6 text-center text-xs text-gray-400">
-                                管理员首次登录后，请在系统管理中配置 Linux DO OAuth
-                            </p>
+                            {!oauthConfigured && (
+                                <p className="mt-6 text-center text-xs text-gray-400">
+                                    管理员首次登录后，请在系统管理中配置 Linux DO OAuth
+                                </p>
+                            )}
                         </>
                     )}
                 </div>
