@@ -13,6 +13,7 @@ export function Login() {
     const [error, setError] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [oauthConfigured, setOauthConfigured] = useState<boolean | null>(null);
+    const [showPasswordForm, setShowPasswordForm] = useState(false);
     const setAuth = useAuthStore((state) => state.setAuth);
     const navigate = useNavigate();
 
@@ -178,82 +179,100 @@ export function Login() {
                                         </svg>
                                         使用 Linux DO 登录
                                     </Button>
-
-                                    {/* Divider */}
-                                    <div className="flex items-center gap-3">
-                                        <div className="flex-1 h-px bg-gray-100" />
-                                        <span className="text-xs text-gray-400">管理员入口</span>
-                                        <div className="flex-1 h-px bg-gray-100" />
-                                    </div>
                                 </div>
                             )}
 
-                            {/* Email/password form (always shown) */}
-                            <form onSubmit={handleLogin} className="space-y-5">
-                                <div className="space-y-1.5">
-                                    <Label
-                                        htmlFor="email"
-                                        className="text-sm font-medium text-gray-700"
+                            {/* When OAuth configured: collapsible password login */}
+                            {oauthConfigured && !showPasswordForm && (
+                                <p className="mt-6 text-center">
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowPasswordForm(true)}
+                                        className="text-xs text-gray-400 hover:text-gray-600 transition-colors"
                                     >
-                                        邮箱地址
-                                    </Label>
-                                    <Input
-                                        id="email"
-                                        type="email"
-                                        placeholder="you@example.com"
-                                        value={email}
-                                        onChange={(e) => setEmail(e.target.value)}
-                                        required
-                                        className="h-11 px-4 rounded-xl border border-gray-200 bg-gray-50 text-gray-900 placeholder:text-gray-400 focus:bg-white focus:border-gray-400 focus:ring-0 transition-colors duration-200"
-                                    />
-                                </div>
+                                        账号密码登录
+                                    </button>
+                                </p>
+                            )}
 
-                                <div className="space-y-1.5">
-                                    <Label
-                                        htmlFor="password"
-                                        className="text-sm font-medium text-gray-700"
-                                    >
-                                        密码
-                                    </Label>
-                                    <Input
-                                        id="password"
-                                        type="password"
-                                        placeholder="••••••••"
-                                        value={password}
-                                        onChange={(e) => setPassword(e.target.value)}
-                                        required
-                                        className="h-11 px-4 rounded-xl border border-gray-200 bg-gray-50 text-gray-900 placeholder:text-gray-400 focus:bg-white focus:border-gray-400 focus:ring-0 transition-colors duration-200"
-                                    />
-                                </div>
-
-                                <Button
-                                    type="submit"
-                                    disabled={isLoading}
-                                    className="w-full h-11 rounded-xl text-sm font-semibold tracking-wide transition-all duration-200"
-                                    style={{
-                                        background: isLoading ? '#374151' : (oauthConfigured ? '#f3f4f6' : '#111827'),
-                                        color: oauthConfigured ? '#374151' : '#ffffff',
-                                        border: oauthConfigured ? '1px solid #e5e7eb' : 'none',
-                                    }}
-                                >
-                                    {isLoading ? (
-                                        <span className="flex items-center justify-center gap-2">
-                                            <svg
-                                                className="animate-spin h-4 w-4"
-                                                xmlns="http://www.w3.org/2000/svg"
-                                                fill="none"
-                                                viewBox="0 0 24 24"
-                                            >
-                                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-                                            </svg>
-                                            登录中...
-                                        </span>
-                                    ) : (
-                                        oauthConfigured ? '管理员密码登录' : '登 录'
+                            {/* Email/password form: always show when no OAuth, or when expanded */}
+                            {(!oauthConfigured || showPasswordForm) && (
+                                <>
+                                    {oauthConfigured && (
+                                        <div className="mt-4 mb-4 flex items-center gap-3">
+                                            <div className="flex-1 h-px bg-gray-100" />
+                                            <span className="text-xs text-gray-400">账号密码登录</span>
+                                            <div className="flex-1 h-px bg-gray-100" />
+                                        </div>
                                     )}
-                                </Button>
-                            </form>
+
+                                    <form onSubmit={handleLogin} className="space-y-5">
+                                        <div className="space-y-1.5">
+                                            <Label
+                                                htmlFor="email"
+                                                className="text-sm font-medium text-gray-700"
+                                            >
+                                                邮箱地址
+                                            </Label>
+                                            <Input
+                                                id="email"
+                                                type="email"
+                                                placeholder="you@example.com"
+                                                value={email}
+                                                onChange={(e) => setEmail(e.target.value)}
+                                                required
+                                                className="h-11 px-4 rounded-xl border border-gray-200 bg-gray-50 text-gray-900 placeholder:text-gray-400 focus:bg-white focus:border-gray-400 focus:ring-0 transition-colors duration-200"
+                                            />
+                                        </div>
+
+                                        <div className="space-y-1.5">
+                                            <Label
+                                                htmlFor="password"
+                                                className="text-sm font-medium text-gray-700"
+                                            >
+                                                密码
+                                            </Label>
+                                            <Input
+                                                id="password"
+                                                type="password"
+                                                placeholder="••••••••"
+                                                value={password}
+                                                onChange={(e) => setPassword(e.target.value)}
+                                                required
+                                                className="h-11 px-4 rounded-xl border border-gray-200 bg-gray-50 text-gray-900 placeholder:text-gray-400 focus:bg-white focus:border-gray-400 focus:ring-0 transition-colors duration-200"
+                                            />
+                                        </div>
+
+                                        <Button
+                                            type="submit"
+                                            disabled={isLoading}
+                                            className="w-full h-11 rounded-xl text-sm font-semibold tracking-wide transition-all duration-200"
+                                            style={{
+                                                background: isLoading ? '#374151' : (oauthConfigured ? '#f3f4f6' : '#111827'),
+                                                color: oauthConfigured ? '#374151' : '#ffffff',
+                                                border: oauthConfigured ? '1px solid #e5e7eb' : 'none',
+                                            }}
+                                        >
+                                            {isLoading ? (
+                                                <span className="flex items-center justify-center gap-2">
+                                                    <svg
+                                                        className="animate-spin h-4 w-4"
+                                                        xmlns="http://www.w3.org/2000/svg"
+                                                        fill="none"
+                                                        viewBox="0 0 24 24"
+                                                    >
+                                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                                                    </svg>
+                                                    登录中...
+                                                </span>
+                                            ) : (
+                                                '登 录'
+                                            )}
+                                        </Button>
+                                    </form>
+                                </>
+                            )}
 
                             {!oauthConfigured && (
                                 <p className="mt-6 text-center text-xs text-gray-400">

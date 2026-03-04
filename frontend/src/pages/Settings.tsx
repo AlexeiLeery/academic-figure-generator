@@ -5,12 +5,21 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '../components/ui/card';
-import { RefreshCw, CheckCircle2 } from 'lucide-react';
+import { RefreshCw, CheckCircle2, Lock } from 'lucide-react';
 
 export function Settings() {
     const { user, updateUser } = useAuthStore();
     const [isLoading, setIsLoading] = useState(false);
     const [success, setSuccess] = useState('');
+
+    const [passwordData, setPasswordData] = useState({
+        current_password: '',
+        new_password: '',
+        confirm_password: '',
+    });
+    const [passwordLoading, setPasswordLoading] = useState(false);
+    const [passwordSuccess, setPasswordSuccess] = useState('');
+    const [passwordError, setPasswordError] = useState('');
 
     const [formData, setFormData] = useState({
         display_name: user?.display_name || '',
@@ -60,6 +69,36 @@ export function Settings() {
 
     if (!user) return null;
 
+    const hasPassword = !user.linuxdo_id || user.email?.indexOf('@linuxdo.local') === -1;
+
+    const handleChangePassword = async () => {
+        setPasswordError('');
+        setPasswordSuccess('');
+
+        if (passwordData.new_password !== passwordData.confirm_password) {
+            setPasswordError('两次输入的新密码不一致');
+            return;
+        }
+        if (passwordData.new_password.length < 8) {
+            setPasswordError('新密码至少需要 8 个字符');
+            return;
+        }
+
+        setPasswordLoading(true);
+        try {
+            await api.put('/auth/me/password', {
+                current_password: passwordData.current_password,
+                new_password: passwordData.new_password,
+            });
+            setPasswordSuccess('密码修改成功！');
+            setPasswordData({ current_password: '', new_password: '', confirm_password: '' });
+        } catch (err: any) {
+            setPasswordError(err.response?.data?.detail || '密码修改失败，请重试');
+        } finally {
+            setPasswordLoading(false);
+        }
+    };
+
     return (
         <div className="max-w-2xl mx-auto space-y-6">
             <div>
@@ -87,6 +126,61 @@ export function Settings() {
                     </div>
                 </CardContent>
             </Card>
+
+            {/* Change Password */}
+            {hasPassword && (
+                <Card>
+                    <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                            <Lock className="w-5 h-5" />
+                            修改密码
+                        </CardTitle>
+                        <CardDescription>更新您的登录密码。</CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                        <div className="space-y-2">
+                            <Label htmlFor="current_password">当前密码</Label>
+                            <Input
+                                id="current_password"
+                                type="password"
+                                placeholder="请输入当前密码"
+                                value={passwordData.current_password}
+                                onChange={e => setPasswordData({ ...passwordData, current_password: e.target.value })}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="new_password">新密码</Label>
+                            <Input
+                                id="new_password"
+                                type="password"
+                                placeholder="至少 8 个字符"
+                                value={passwordData.new_password}
+                                onChange={e => setPasswordData({ ...passwordData, new_password: e.target.value })}
+                            />
+                        </div>
+                        <div className="space-y-2">
+                            <Label htmlFor="confirm_password">确认新密码</Label>
+                            <Input
+                                id="confirm_password"
+                                type="password"
+                                placeholder="再次输入新密码"
+                                value={passwordData.confirm_password}
+                                onChange={e => setPasswordData({ ...passwordData, confirm_password: e.target.value })}
+                            />
+                        </div>
+                    </CardContent>
+                    <CardFooter className="flex justify-between border-t bg-muted/40 p-4">
+                        <div>
+                            {passwordSuccess && <p className="text-sm text-green-600 font-medium">{passwordSuccess}</p>}
+                            {passwordError && <p className="text-sm text-red-600 font-medium">{passwordError}</p>}
+                        </div>
+                        <Button onClick={handleChangePassword} disabled={passwordLoading}>
+                            {passwordLoading && <RefreshCw className="w-4 h-4 mr-2 animate-spin" />}
+                            修改密码
+                        </Button>
+                    </CardFooter>
+                </Card>
+            )}
 
             <Card>
                 <CardHeader>

@@ -22,6 +22,7 @@ from app.dependencies import get_current_active_user, get_db
 from app.models.system_settings import SystemSettings
 from app.models.user import User
 from app.schemas.auth import (
+    ChangePassword,
     TokenRefresh,
     TokenResponse,
     UserLogin,
@@ -186,6 +187,25 @@ async def update_me(
     await db.flush()
     await db.refresh(user)
     return _user_to_response(user)
+
+
+@router.put("/me/password")
+async def change_password(
+    data: ChangePassword,
+    user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Change the current user's password."""
+    if not user.password_hash:
+        raise BadRequestException("OAuth 用户无法通过此方式修改密码")
+
+    if not verify_password(data.current_password, user.password_hash):
+        raise BadRequestException("当前密码不正确")
+
+    user.password_hash = hash_password(data.new_password)
+    db.add(user)
+    await db.flush()
+    return {"message": "密码修改成功"}
 
 
 # ---------------------------------------------------------------------------
