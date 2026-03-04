@@ -1,0 +1,338 @@
+# Academic Figure Generator
+
+AI 驱动的学术论文配图生成平台。上传论文 → AI 分析内容生成 Prompt → 一键生成高质量科研配图。
+
+## 功能特性
+
+- **智能 Prompt 生成** — 上传 PDF/DOCX/TXT 论文，Claude AI 自动分析内容并生成配图描述
+- **高质量配图** — 支持 1K/2K/4K 多分辨率，16:9/4:3/1:1 等多种比例
+- **配色方案** — 50+ 预设学术配色（含色盲友好方案），支持自定义配色
+- **图生图编辑** — 基于已有图片 + 文字指令进行二次编辑
+- **实时状态** — SSE 流式推送生成进度，无需手动刷新
+- **项目管理** — 按项目组织论文、Prompt 和配图
+- **多用户** — 完整的注册/登录体系，支持 Linux DO OAuth 登录
+- **BYOK** — 用户可配置自己的 API Key（Claude / NanoBanana），也可使用平台统一 Key
+- **计费系统** — 统一余额 (CNY) 计费，支持 Linux DO 积分自助充值
+- **管理后台** — API Key 管理、计费配置、用户管理、用量统计
+
+## 技术栈
+
+| 层级 | 技术 |
+|------|------|
+| 后端 | FastAPI · SQLAlchemy (Async) · Celery · Python 3.12+ |
+| 前端 | React 19 · TypeScript · Vite · Tailwind CSS · Radix UI |
+| 数据库 | PostgreSQL 16 · Redis 7 |
+| 存储 | MinIO (S3 兼容) |
+| AI | Claude API (Prompt 生成) · NanoBanana API (配图生成) |
+| 部署 | Docker Compose · Nginx |
+
+## 项目结构
+
+```
+academic-figure-generator/
+├── backend/                  # FastAPI 后端
+│   ├── app/
+│   │   ├── api/v1/           # API 路由 (auth, projects, prompts, images, payment, admin...)
+│   │   ├── models/           # SQLAlchemy ORM 模型
+│   │   ├── schemas/          # Pydantic 请求/响应 Schema
+│   │   ├── services/         # 业务逻辑层
+│   │   ├── tasks/            # Celery 异步任务
+│   │   ├── core/             # 安全、中间件、异常、Prompt 模板
+│   │   ├── config.py         # 环境变量配置
+│   │   └── main.py           # FastAPI 应用工厂
+│   ├── alembic/              # 数据库迁移
+│   ├── pyproject.toml
+│   └── Dockerfile
+├── frontend/                 # React SPA 前端
+│   ├── src/
+│   │   ├── pages/            # 页面组件
+│   │   ├── components/ui/    # Radix UI 组件库
+│   │   ├── store/            # Zustand 状态管理
+│   │   └── lib/              # API 客户端、工具函数
+│   ├── package.json
+│   └── vite.config.ts
+├── nginx/                    # Nginx 反向代理 + 前端多阶段构建
+│   ├── nginx.conf
+│   └── Dockerfile
+├── docker-compose.yml        # 开发/基础编排
+├── docker-compose.prod.yml   # 生产覆盖配置
+├── Makefile                  # 常用命令快捷方式
+└── .env.example              # 环境变量模板
+```
+
+## 快速开始
+
+### 前置要求
+
+- [Docker](https://docs.docker.com/get-docker/) 和 [Docker Compose](https://docs.docker.com/compose/install/)
+- 至少一个 AI API Key（Claude 或 NanoBanana，可部署后在管理后台配置）
+
+### 1. 克隆仓库
+
+```bash
+git clone https://github.com/你的用户名/academic-figure-generator.git
+cd academic-figure-generator
+```
+
+### 2. 配置环境变量
+
+```bash
+cp .env.docker.example .env
+```
+
+编辑 `.env`，**必须修改**以下字段：
+
+```bash
+# 数据库密码（随意设置一个强密码）
+POSTGRES_PASSWORD=your_secure_password
+
+# MinIO 存储密码
+MINIO_SECRET_KEY=your_minio_secret
+
+# 应用密钥（用于 JWT 签发，至少 32 字符）
+SECRET_KEY=your_random_secret_key_at_least_32_chars
+
+# 加密主密钥（用于 AES-256 加密存储的 API Key）
+# 生成方式: python -c "import secrets; print(secrets.token_hex(32))"
+ENCRYPTION_MASTER_KEY=your_64_char_hex_string
+```
+
+### 3. 启动服务
+
+**开发模式**（带热重载）：
+
+```bash
+make dev
+# 或
+docker compose up --build
+```
+
+**生产模式**：
+
+```bash
+make prod-up
+# 或
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+```
+
+### 4. 访问
+
+| 服务 | 地址 |
+|------|------|
+| 应用首页 | http://localhost:8082 |
+| API 文档 (Swagger) | http://localhost:8082/docs（仅开发模式） |
+| MinIO 控制台 | http://localhost:9001 |
+
+### 5. 初始配置
+
+1. 使用默认管理员账号登录：`admin@admin.com` / `admin`
+2. 进入 **系统管理** 页面，配置：
+   - **Claude API Key** — 用于 Prompt 生成
+   - **NanoBanana API Key** — 用于配图生成
+   - **计费参数** — 图片单价、汇率等
+3. （可选）配置 Linux DO OAuth 登录
+4. （可选）配置 Linux DO 积分支付（EasyPay）
+
+> **请务必在首次登录后修改管理员密码！**
+
+## API Key 配置说明
+
+系统支持三级 API Key 优先级：
+
+| 优先级 | 来源 | 说明 |
+|--------|------|------|
+| 1（最高）| 用户 BYOK | 用户在「设置」页面自行配置的 Key |
+| 2 | 管理后台系统 Key | 管理员在「系统管理」中配置的平台统一 Key |
+| 3 | 环境变量 | `.env` 中的 `CLAUDE_API_KEY` / `NANOBANANA_API_KEY` |
+
+所有 API Key 均使用 AES-256-GCM 加密存储，数据库中不存在明文 Key。
+
+## Linux DO 集成
+
+### OAuth 登录
+
+1. 在 [Linux DO](https://linux.do) 开发者设置中创建 OAuth 应用
+2. 回调地址填写：`https://你的域名/api/v1/auth/linuxdo/callback`
+3. 在管理后台填入 Client ID 和 Client Secret
+
+### 积分充值（EasyPay）
+
+1. 在 Linux DO 申请 EasyPay 商户
+   - 应用主页：`https://你的域名`
+   - 通知地址：`https://你的域名/api/v1/payment/notify`
+2. 在管理后台填入 PID、Key 和积分兑换比率
+3. 用户即可在「用量看板」使用 Linux DO 积分自助充值
+
+## 常用命令
+
+```bash
+make help           # 查看所有可用命令
+
+# 开发
+make dev            # 启动开发环境（前台运行，带日志）
+make up             # 启动开发环境（后台运行）
+make down           # 停止服务
+make logs           # 查看日志
+
+# 数据库
+make migrate        # 执行数据库迁移
+make migrate-create MSG="描述"  # 创建新迁移
+
+# 代码质量
+make lint           # 运行 linter
+make format         # 自动格式化代码
+make test           # 运行测试
+make test-cov       # 运行测试 + 覆盖率报告
+
+# 生产
+make prod-up        # 启动生产环境
+make prod-down      # 停止生产环境
+
+# 调试
+make shell          # 进入后端容器 Shell
+make dbshell        # 进入 PostgreSQL Shell
+make redis-cli      # 进入 Redis CLI
+
+# 清理
+make clean          # 删除所有容器、卷和镜像（⚠️ 会丢失数据）
+```
+
+## VPS 部署
+
+### 首次部署
+
+```bash
+git clone <仓库地址> academic-figure-generator
+cd academic-figure-generator
+
+cp .env.docker.example .env
+# 编辑 .env，配置必要的密码和密钥
+
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+```
+
+### 更新部署
+
+```bash
+cd academic-figure-generator
+git pull
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+```
+
+数据（PostgreSQL / Redis / MinIO）存储在 Docker Volume 中，更新不会丢失。
+
+### 反向代理
+
+应用内置 Nginx 默认绑定到 `APP_HTTP_PORT`（默认 8082）。建议在 VPS 上使用 Caddy 或 Nginx 作为总反代，将 80/443 端口转发到本应用：
+
+```nginx
+# Nginx 示例
+server {
+    listen 443 ssl;
+    server_name fig.yourdomain.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:8082;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # SSE 支持
+        proxy_buffering off;
+        proxy_cache off;
+    }
+}
+```
+
+## 架构概览
+
+```
+用户浏览器
+    │
+    ▼
+  Nginx (静态文件 + 反向代理)
+    │
+    ├──► React SPA (前端)
+    │
+    └──► FastAPI (后端 API)
+            │
+            ├── PostgreSQL (用户、项目、Prompt、图片元数据)
+            ├── Redis (JWT 缓存、Celery 消息队列)
+            ├── MinIO (图片文件存储)
+            │
+            └── Celery Workers
+                 ├── Claude API → Prompt 生成
+                 └── NanoBanana API → 图片生成
+```
+
+### 核心流程
+
+1. **上传论文** → 后端解析 PDF/DOCX 提取文本和章节结构
+2. **生成 Prompt** → Celery 任务调用 Claude API，分析论文内容生成配图描述
+3. **生成配图** → 用户确认/编辑 Prompt 后，Celery 任务调用 NanoBanana API 生成图片
+4. **实时反馈** → SSE 推送生成进度，前端实时更新状态
+5. **下载管理** → 图片存储在 MinIO，通过预签名 URL 下载
+
+## 环境变量参考
+
+| 变量 | 必填 | 默认值 | 说明 |
+|------|------|--------|------|
+| `SECRET_KEY` | 是 | — | 应用密钥，用于 JWT 等 |
+| `POSTGRES_PASSWORD` | 是 | — | PostgreSQL 密码 |
+| `MINIO_SECRET_KEY` | 是 | — | MinIO Secret Key |
+| `ENCRYPTION_MASTER_KEY` | 是 | — | AES-256 加密主密钥（64 字符 hex） |
+| `APP_ENV` | 否 | `development` | `development` / `production` |
+| `DEBUG` | 否 | `true` | 是否启用调试模式和 API 文档 |
+| `APP_HTTP_PORT` | 否 | `8082` | Nginx 对外端口 |
+| `POSTGRES_HOST` | 否 | `postgres` | 数据库主机 |
+| `POSTGRES_PORT` | 否 | `5432` | 数据库端口 |
+| `POSTGRES_USER` | 否 | `afg_user` | 数据库用户 |
+| `POSTGRES_DB` | 否 | `academic_figure_generator` | 数据库名 |
+| `REDIS_URL` | 否 | `redis://redis:6379/0` | Redis 连接地址 |
+| `MINIO_ENDPOINT` | 否 | `minio:9000` | MinIO 地址 |
+| `MINIO_ACCESS_KEY` | 否 | `minioadmin` | MinIO Access Key |
+| `MINIO_BUCKET_NAME` | 否 | `academic-figures` | MinIO 存储桶名 |
+| `CLAUDE_API_KEY` | 否 | — | Claude API Key（可在管理后台配置） |
+| `CLAUDE_MODEL` | 否 | `claude-sonnet-4-20250514` | Claude 模型 |
+| `NANOBANANA_API_KEY` | 否 | — | NanoBanana API Key（可在管理后台配置） |
+| `NANOBANANA_API_BASE` | 否 | `https://api.ikuncode.cc` | NanoBanana API 地址 |
+| `CORS_ORIGINS` | 否 | `["http://localhost:3000","http://localhost:5173"]` | CORS 允许来源 |
+
+## 开发指南
+
+### 后端开发
+
+```bash
+# 进入后端容器
+make shell
+
+# 创建数据库迁移
+alembic revision --autogenerate -m "add new table"
+
+# 执行迁移
+alembic upgrade head
+
+# 运行测试
+pytest -v
+
+# 代码检查
+ruff check app/
+ruff format app/
+```
+
+### 前端开发
+
+```bash
+cd frontend
+npm install
+npm run dev     # 启动开发服务器 (localhost:5173)
+npm run build   # 生产构建
+npm run lint    # ESLint 检查
+```
+
+前端开发服务器会自动将 `/api` 请求代理到 `localhost:8000`。
+
+## 许可证
+
+MIT License
