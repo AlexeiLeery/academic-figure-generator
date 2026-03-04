@@ -21,7 +21,14 @@ type DocumentItem = {
     file_size_bytes: number;
     parse_status: 'pending' | 'parsing' | 'completed' | 'failed' | string;
     parse_error?: string | null;
-    sections?: Array<{ title?: string; content?: string }> | null;
+    sections?: Array<{
+        title?: string;
+        content?: string;
+        text?: string;
+        level?: number;
+        page_start?: number | null;
+        page_end?: number | null;
+    }> | null;
     created_at?: string;
 };
 
@@ -60,6 +67,79 @@ export function ProjectWorkspace() {
     const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
     const [showStructure, setShowStructure] = useState(true);
     const [showDocs, setShowDocs] = useState(true);
+    const structureInitRef = useRef<string | null>(null);
+
+    type SectionNode = {
+        idx: number;
+        title: string;
+        level: number;
+        preview: string;
+        children: SectionNode[];
+    };
+
+    const inferLevelFromTitle = (rawTitle: string): number | null => {
+        const title = rawTitle.trim();
+        if (!title) return null;
+
+        if (/^第\s*[0-9一二三四五六七八九十百千]+\s*章\b/.test(title)) return 1;
+        if (/^chapter\s+\d+\b/i.test(title)) return 1;
+
+        const dotted = title.match(/^(\d+(?:\.\d+)+)\b/);
+        if (dotted) return dotted[1].split('.').length;
+
+        const leadingNum = title.match(/^(\d+)\b/);
+        if (leadingNum) return 1;
+
+        return null;
+    };
+
+    const buildSectionTree = (sections: DocumentItem['sections']): SectionNode[] => {
+        const arr = (sections || []).map((sec, idx) => {
+            const title = (sec?.title || `Section ${idx + 1}`).toString();
+            const rawLevel = Number(sec?.level) || 1;
+            const previewText = (sec?.content || sec?.text || '').toString().trim();
+            const inferred = inferLevelFromTitle(title);
+            return { idx, title, rawLevel, inferred, preview: previewText };
+        });
+
+        const rawLevels = arr.map((s) => s.rawLevel);
+        const rawVaries = new Set(rawLevels).size > 1;
+        const inferredLevels = arr.map((s) => s.inferred).filter((x): x is number => typeof x === 'number');
+        const inferredVaries = new Set(inferredLevels).size > 1;
+        const useInferred = !rawVaries && inferredVaries;
+
+        const nodes: SectionNode[] = arr.map((s) => ({
+            idx: s.idx,
+            title: s.title,
+            level: useInferred ? (s.inferred || s.rawLevel) : s.rawLevel,
+            preview: s.preview,
+            children: [],
+        }));
+
+        const roots: SectionNode[] = [];
+        const stack: SectionNode[] = [];
+        for (const node of nodes) {
+            const level = Math.max(1, Math.floor(node.level || 1));
+            node.level = level;
+            while (stack.length && level <= stack[stack.length - 1].level) stack.pop();
+            if (!stack.length) roots.push(node);
+            else stack[stack.length - 1].children.push(node);
+            stack.push(node);
+        }
+
+        return roots;
+    };
+
+    const collectIndices = (node: SectionNode): number[] => {
+        const out: number[] = [node.idx];
+        const stack: SectionNode[] = [...node.children];
+        while (stack.length) {
+            const cur = stack.pop()!;
+            out.push(cur.idx);
+            for (const ch of cur.children) stack.push(ch);
+        }
+        return out;
+    };
 
     // Per-image features
     const [colorSchemes, setColorSchemes] = useState<any[]>([]);
@@ -93,6 +173,20 @@ export function ProjectWorkspace() {
         }
         return () => setCurrentProject(null);
     }, [id, token]);
+
+    useEffect(() => {
+        const parsedDoc = documents.find(
+            (d) => d.parse_status === 'completed' && Array.isArray(d.sections) && d.sections.length > 0
+        );
+        if (!parsedDoc?.id || !Array.isArray(parsedDoc.sections) || parsedDoc.sections.length === 0) return;
+        if (structureInitRef.current === parsedDoc.id) return;
+
+        const roots = buildSectionTree(parsedDoc.sections);
+        const next: Record<string, boolean> = {};
+        for (const r of roots) next[`sec-${r.idx}`] = true; // default collapsed: only show chapters
+        setCollapsedGroups(next);
+        structureInitRef.current = parsedDoc.id;
+    }, [documents]);
 
     useEffect(() => {
         return () => {
@@ -338,65 +432,7 @@ export function ProjectWorkspace() {
         if (!parsedDoc) return <div className="text-sm text-muted-foreground">上传文档并等待解析完成后，这里会显示章节结构。</div>;
 
         const sections = parsedDoc.sections || [];
-
-        const getGroupKeyAndTitle = (rawTitle: string | undefined | null) => {
-            const title = (rawTitle || '').trim();
-            if (!title) return null;
-
-            const cn = title.match(/^第\s*([0-9一二三四五六七八九十百千]+)\s*章\s*[:：]?\s*(.*)$/);
-            if (cn) {
-                const idx = cn[1];
-                const rest = (cn[2] || '').trim();
-                return { key: `chapter-${idx}`, title: rest ? `第${idx}章：${rest}` : `第${idx}章` };
-            }
-
-            const en = title.match(/^chapter\s+(\d+)\b\s*[:：-]?\s*(.*)$/i);
-            if (en) {
-                const idx = en[1];
-                const rest = (en[2] || '').trim();
-                return { key: `chapter-${idx}`, title: rest ? `Chapter ${idx}: ${rest}` : `Chapter ${idx}` };
-            }
-
-            if (/^(摘要|abstract|引言|introduction|结论|conclusion|参考文献|references)\b/i.test(title)) {
-                return { key: `section-${title.toLowerCase()}`, title };
-            }
-
-            return null;
-        };
-
-        type Group = {
-            key: string;
-            title: string;
-            items: Array<{ idx: number; title: string; preview: string }>;
-        };
-
-        const groups: Group[] = [];
-        let current: Group | null = null;
-
-        sections.forEach((sec: any, idx: number) => {
-            const groupInfo = getGroupKeyAndTitle(sec?.title);
-            if (groupInfo) {
-                current = groups.find((g) => g.key === groupInfo.key) || null;
-                if (!current) {
-                    current = { key: groupInfo.key, title: groupInfo.title, items: [] };
-                    groups.push(current);
-                }
-            }
-            if (!current) {
-                current = groups.find((g) => g.key === 'misc') || null;
-                if (!current) {
-                    current = { key: 'misc', title: '其他', items: [] };
-                    groups.push(current);
-                }
-            }
-
-            const previewText = (sec?.content || sec?.text || '').toString().trim();
-            current.items.push({
-                idx,
-                title: (sec?.title || `Section ${idx + 1}`).toString(),
-                preview: previewText,
-            });
-        });
+        const roots = buildSectionTree(sections);
 
         const allIndices = sections.map((_, idx) => idx);
         const selectedSet = new Set(selectedSectionIndices);
@@ -409,6 +445,42 @@ export function ProjectWorkspace() {
                     else set.delete(i);
                 }
                 return Array.from(set).sort((a, b) => a - b);
+            });
+        };
+
+        const renderNodes = (nodes: SectionNode[], depth: number) => {
+            return nodes.map((node) => {
+                const key = `node-${node.idx}`;
+                const isChecked = selectedSet.has(node.idx);
+                const indentPx = depth * 14;
+
+                return (
+                    <div key={key}>
+                        <div
+                            className="flex items-start space-x-2 p-3 bg-background/60 rounded border"
+                            style={{ marginLeft: `${indentPx}px` }}
+                        >
+                            <input
+                                type="checkbox"
+                                className="mt-1"
+                                checked={isChecked}
+                                onChange={(e) => selectMany([node.idx], e.target.checked)}
+                            />
+                            <div className="min-w-0">
+                                <p className="text-sm font-medium leading-none truncate">{node.title}</p>
+                                {node.preview && node.children.length === 0 && (
+                                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{node.preview}</p>
+                                )}
+                            </div>
+                        </div>
+
+                        {node.children.length > 0 && (
+                            <div className="mt-2 space-y-2">
+                                {renderNodes(node.children, depth + 1)}
+                            </div>
+                        )}
+                    </div>
+                );
             });
         };
 
@@ -438,7 +510,7 @@ export function ProjectWorkspace() {
                             size="sm"
                             onClick={() => {
                                 const next: Record<string, boolean> = {};
-                                for (const g of groups) next[g.key] = false;
+                                for (const r of roots) next[`sec-${r.idx}`] = false;
                                 setCollapsedGroups(next);
                             }}
                         >
@@ -449,7 +521,7 @@ export function ProjectWorkspace() {
                             size="sm"
                             onClick={() => {
                                 const next: Record<string, boolean> = {};
-                                for (const g of groups) next[g.key] = true;
+                                for (const r of roots) next[`sec-${r.idx}`] = true;
                                 setCollapsedGroups(next);
                             }}
                         >
@@ -459,21 +531,22 @@ export function ProjectWorkspace() {
                 </div>
 
                 <div className="space-y-2">
-                    {groups.map((g) => {
-                        const indices = g.items.map((it) => it.idx);
+                    {roots.map((chapter) => {
+                        const indices = collectIndices(chapter);
                         const selectedCount = indices.reduce((acc, i) => acc + (selectedSet.has(i) ? 1 : 0), 0);
                         const allChecked = selectedCount === indices.length && indices.length > 0;
                         const partiallyChecked = selectedCount > 0 && selectedCount < indices.length;
-                        const isCollapsed = collapsedGroups[g.key] ?? false;
+                        const groupKey = `sec-${chapter.idx}`;
+                        const isCollapsed = collapsedGroups[groupKey] ?? true;
 
                         return (
                             <details
-                                key={g.key}
+                                key={groupKey}
                                 open={!isCollapsed}
                                 className="rounded border bg-muted/20"
                                 onToggle={(e) => {
                                     const open = (e.currentTarget as HTMLDetailsElement).open;
-                                    setCollapsedGroups((prev) => ({ ...prev, [g.key]: !open }));
+                                    setCollapsedGroups((prev) => ({ ...prev, [groupKey]: !open }));
                                 }}
                             >
                                 <summary className="cursor-pointer select-none list-none px-3 py-2 flex items-center justify-between">
@@ -489,7 +562,7 @@ export function ProjectWorkspace() {
                                             onChange={(e) => selectMany(indices, e.target.checked)}
                                         />
                                         <div className="min-w-0">
-                                            <div className="text-sm font-medium truncate">{g.title}</div>
+                                            <div className="text-sm font-medium truncate">{chapter.title}</div>
                                             <div className="text-xs text-muted-foreground">
                                                 {selectedCount}/{indices.length} 已选
                                             </div>
@@ -499,22 +572,34 @@ export function ProjectWorkspace() {
                                 </summary>
 
                                 <div className="px-3 pb-3 space-y-2">
-                                    {g.items.map((it) => (
-                                        <div key={it.idx} className="flex items-start space-x-2 p-3 bg-background/60 rounded border">
+                                    <div className="space-y-2">
+                                        <div className="flex items-start space-x-2 p-3 bg-background/60 rounded border">
                                             <input
                                                 type="checkbox"
                                                 className="mt-1"
-                                                checked={selectedSet.has(it.idx)}
-                                                onChange={(e) => selectMany([it.idx], e.target.checked)}
+                                                checked={selectedSet.has(chapter.idx)}
+                                                onChange={(e) => selectMany([chapter.idx], e.target.checked)}
                                             />
                                             <div className="min-w-0">
-                                                <p className="text-sm font-medium leading-none truncate">{it.title}</p>
-                                                {it.preview && (
-                                                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{it.preview}</p>
+                                                <p className="text-sm font-medium leading-none truncate">
+                                                    {chapter.title}（章节内容）
+                                                </p>
+                                                {chapter.preview && (
+                                                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                                                        {chapter.preview}
+                                                    </p>
                                                 )}
                                             </div>
                                         </div>
-                                    ))}
+
+                                        {chapter.children.length ? (
+                                            renderNodes(chapter.children, 1)
+                                        ) : (
+                                            <div className="text-xs text-muted-foreground py-2">
+                                                该章节下未识别到小节（文档可能是纯段落/无标题结构）。
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
                             </details>
                         );
