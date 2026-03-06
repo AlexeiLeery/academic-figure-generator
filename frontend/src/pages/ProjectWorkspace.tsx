@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { FileUp, FileText, Image as ImageIcon, Send, RefreshCw, Download, ChevronLeft, ChevronRight, ScanText, FileDown, AlertCircle, CheckCircle2, Loader2, Eye } from 'lucide-react';
 
@@ -20,6 +20,7 @@ type DocumentItem = {
     original_filename: string;
     file_type: string;
     file_size_bytes: number;
+    page_count?: number | null;
     parse_status: 'pending' | 'parsing' | 'completed' | 'failed' | string;
     parse_error?: string | null;
     ocr_markdown?: string | null;
@@ -560,7 +561,7 @@ export function ProjectWorkspace() {
             return acc + ((s?.content || s?.text || '') as string).length;
         }, 0);
 
-        const renderNodes = (nodes: SectionNode[], depth: number): JSX.Element[] => {
+        const renderNodes = (nodes: SectionNode[], depth: number): React.ReactElement[] => {
             return nodes.map((node) => {
                 const key = `node-${node.idx}`;
                 const isChecked = selectedSet.has(node.idx);
