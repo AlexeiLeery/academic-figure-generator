@@ -74,6 +74,11 @@ class Document(Base, TimestampMixin):
         Text,
         nullable=True,
     )
+    ocr_markdown: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Raw OCR Markdown output from PaddleOCR",
+    )
 
     # Relationships
     project: Mapped["Project"] = relationship("Project", back_populates="documents")

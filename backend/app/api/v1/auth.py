@@ -54,8 +54,10 @@ def _user_to_response(user: User) -> UserResponse:
         default_aspect_ratio=user.default_aspect_ratio,
         claude_api_key_set=user.claude_api_key_enc is not None,
         nanobanana_api_key_set=user.nanobanana_api_key_enc is not None,
+        paddleocr_api_key_set=user.paddleocr_token_enc is not None,
         claude_api_base_url=user.claude_api_base_url,
         nanobanana_api_base_url=user.nanobanana_api_base_url,
+        paddleocr_server_url=user.paddleocr_server_url,
         claude_tokens_quota=user.claude_tokens_quota,
         nanobanana_images_quota=user.nanobanana_images_quota,
         linuxdo_id=user.linuxdo_id,
@@ -178,6 +180,13 @@ async def update_me(
             user.nanobanana_api_key_enc = encrypt_api_key(raw_key)
         else:
             user.nanobanana_api_key_enc = None
+
+    if "paddleocr_api_key" in updates:
+        raw_key = updates.pop("paddleocr_api_key")
+        if raw_key:
+            user.paddleocr_token_enc = encrypt_api_key(raw_key)
+        else:
+            user.paddleocr_token_enc = None
 
     # Apply remaining scalar updates
     for field, value in updates.items():

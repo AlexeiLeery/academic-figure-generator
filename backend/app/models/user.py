@@ -68,6 +68,16 @@ class User(Base, TimestampMixin):
         nullable=True,
         comment="User-custom NanoBanana API base URL",
     )
+    paddleocr_server_url: Mapped[Optional[str]] = mapped_column(
+        String(500),
+        nullable=True,
+        comment="User-configured PaddleOCR server URL",
+    )
+    paddleocr_token_enc: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="AES-256 encrypted PaddleOCR access token",
+    )
     default_color_scheme: Mapped[str] = mapped_column(
         String(50),
         default="okabe-ito",

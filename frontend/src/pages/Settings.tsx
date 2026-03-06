@@ -5,7 +5,7 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '../components/ui/card';
-import { RefreshCw, CheckCircle2, Lock } from 'lucide-react';
+import { RefreshCw, CheckCircle2, Lock, ScanText } from 'lucide-react';
 
 export function Settings() {
     const { user, updateUser } = useAuthStore();
@@ -25,9 +25,15 @@ export function Settings() {
         display_name: user?.display_name || '',
         claude_api_key: '',
         nanobanana_api_key: '',
+        paddleocr_api_key: '',
         claude_api_base_url: user?.claude_api_base_url || '',
         nanobanana_api_base_url: user?.nanobanana_api_base_url || '',
+        paddleocr_server_url: user?.paddleocr_server_url || '',
     });
+
+    const [ocrLoading, setOcrLoading] = useState(false);
+    const [ocrSuccess, setOcrSuccess] = useState('');
+    const [ocrError, setOcrError] = useState('');
 
     useEffect(() => {
         if (user) {
@@ -36,6 +42,7 @@ export function Settings() {
                 display_name: user.display_name,
                 claude_api_base_url: user.claude_api_base_url || '',
                 nanobanana_api_base_url: user.nanobanana_api_base_url || '',
+                paddleocr_server_url: user.paddleocr_server_url || '',
             }));
         }
     }, [user]);
@@ -59,11 +66,33 @@ export function Settings() {
 
             // Clear api keys from form data after save
             setFormData(prev => ({ ...prev, claude_api_key: '', nanobanana_api_key: '' }));
+            setOcrSuccess('');
+            setOcrError('');
         } catch (e) {
             console.error(e);
             alert('保存设置失败，请重试');
         } finally {
             setIsLoading(false);
+        }
+    };
+
+    const handleSaveOcr = async () => {
+        setOcrLoading(true);
+        setOcrSuccess('');
+        setOcrError('');
+        try {
+            const payload: any = {
+                paddleocr_server_url: formData.paddleocr_server_url || null,
+            };
+            if (formData.paddleocr_api_key) payload.paddleocr_api_key = formData.paddleocr_api_key;
+            const res = await api.put('/auth/me', payload);
+            updateUser(res.data);
+            setOcrSuccess('PaddleOCR 配置保存成功！');
+            setFormData(prev => ({ ...prev, paddleocr_api_key: '' }));
+        } catch (e) {
+            setOcrError('保存失败，请重试');
+        } finally {
+            setOcrLoading(false);
         }
     };
 
@@ -257,6 +286,63 @@ export function Settings() {
                     <Button onClick={handleSave} disabled={isLoading}>
                         {isLoading && <RefreshCw className="w-4 h-4 mr-2 animate-spin" />}
                         保存设置
+                    </Button>
+                </CardFooter>
+            </Card>
+
+            {/* PaddleOCR Configuration Card */}
+            <Card>
+                <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                        <ScanText className="w-5 h-5 text-blue-500" />
+                        PaddleOCR 文档解析
+                    </CardTitle>
+                    <CardDescription>
+                        配置您自己的 PaddleOCR-VL 服务地址和访问令牌，用于将 PDF 解析为结构化 Markdown。
+                        配置后可在项目工作区对 PDF 文档一键触发 OCR 解析。
+                    </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                    <div className="rounded-lg border bg-blue-50/50 p-3 text-xs text-blue-700 space-y-1">
+                        <p className="font-medium">如何获取？</p>
+                        <p>在 AI Studio 部署 PaddleOCR-VL 后，将服务地址（形如 <code className="font-mono bg-blue-100 px-1 rounded">https://xxx.aistudio-app.com</code>）和 Access Token 填入下方。</p>
+                    </div>
+                    <div className="space-y-2">
+                        <Label htmlFor="paddleocr_url">Server URL</Label>
+                        <Input
+                            id="paddleocr_url"
+                            placeholder="https://your-app.aistudio-app.com"
+                            value={formData.paddleocr_server_url}
+                            onChange={e => setFormData({ ...formData, paddleocr_server_url: e.target.value })}
+                        />
+                        <p className="text-xs text-muted-foreground">填写服务根地址，勿包含 /layout-parsing 路径。</p>
+                    </div>
+                    <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                            <Label htmlFor="paddleocr_token">Access Token</Label>
+                            {user.paddleocr_api_key_set && (
+                                <span className="flex items-center text-xs text-green-600 bg-green-50 px-2 py-0.5 rounded-full">
+                                    <CheckCircle2 className="w-3 h-3 mr-1" /> 已配置
+                                </span>
+                            )}
+                        </div>
+                        <Input
+                            id="paddleocr_token"
+                            type="password"
+                            placeholder={(user as any).paddleocr_api_key_set ? "（已配置，输入新值以覆盖）" : "输入 Access Token"}
+                            value={formData.paddleocr_api_key}
+                            onChange={e => setFormData({ ...formData, paddleocr_api_key: e.target.value })}
+                        />
+                    </div>
+                </CardContent>
+                <CardFooter className="flex justify-between border-t bg-muted/40 p-4">
+                    <div>
+                        {ocrSuccess && <p className="text-sm text-green-600 font-medium">{ocrSuccess}</p>}
+                        {ocrError && <p className="text-sm text-red-600 font-medium">{ocrError}</p>}
+                    </div>
+                    <Button onClick={handleSaveOcr} disabled={ocrLoading}>
+                        {ocrLoading && <RefreshCw className="w-4 h-4 mr-2 animate-spin" />}
+                        保存 OCR 配置
                     </Button>
                 </CardFooter>
             </Card>

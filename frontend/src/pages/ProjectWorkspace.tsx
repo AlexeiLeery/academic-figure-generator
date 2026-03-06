@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { FileUp, FileText, Image as ImageIcon, Send, RefreshCw, Download, ChevronLeft, ChevronRight } from 'lucide-react';
+import { FileUp, FileText, Image as ImageIcon, Send, RefreshCw, Download, ChevronLeft, ChevronRight, ScanText, FileDown, AlertCircle, CheckCircle2, Loader2, Eye } from 'lucide-react';
 
 import { api } from '../lib/api';
 import { useProjectStore } from '../store/projectStore';
@@ -22,6 +22,7 @@ type DocumentItem = {
     file_size_bytes: number;
     parse_status: 'pending' | 'parsing' | 'completed' | 'failed' | string;
     parse_error?: string | null;
+    ocr_markdown?: string | null;
     sections?: Array<{
         title?: string;
         content?: string;
@@ -78,6 +79,9 @@ export function ProjectWorkspace() {
     const [showStructure, setShowStructure] = useState(true);
     const [showDocs, setShowDocs] = useState(true);
     const structureInitRef = useRef<string | null>(null);
+    const [ocrLoading, setOcrLoading] = useState<Record<string, boolean>>({});
+    const [activePreviewIdx, setActivePreviewIdx] = useState<number | null>(null);
+    const user = useAuthStore((s) => s.user);
 
     type SectionNode = {
         idx: number;
@@ -225,6 +229,14 @@ export function ProjectWorkspace() {
         return () => clearInterval(interval);
     }, [images, id]);
 
+    // Poll while any document is still parsing (including OCR)
+    useEffect(() => {
+        const hasParsing = documents.some(d => d.parse_status === 'parsing' || d.parse_status === 'pending');
+        if (!hasParsing || !id) return;
+        const interval = setInterval(() => { fetchProjectData(id, { showLoader: false }); }, 4000);
+        return () => clearInterval(interval);
+    }, [documents, id]);
+
     const fetchProjectData = async (projectId: string, opts?: { showLoader?: boolean }) => {
         const showLoader = opts?.showLoader ?? false;
         if (showLoader) setIsInitialLoading(true);
@@ -335,6 +347,39 @@ export function ProjectWorkspace() {
             setUploadProgress(0);
             if (fileInputRef.current) fileInputRef.current.value = '';
         }
+    };
+
+    const handleTriggerOcr = async (doc: DocumentItem) => {
+        if (!id || ocrLoading[doc.id]) return;
+        setOcrLoading(prev => ({ ...prev, [doc.id]: true }));
+        try {
+            await api.post(`/projects/${id}/documents/${doc.id}/ocr`);
+            // Poll until parse_status changes from 'parsing'
+            const deadline = Date.now() + 300_000;
+            while (Date.now() < deadline) {
+                await new Promise(r => setTimeout(r, 3000));
+                const docsRes = await api.get(`/projects/${id}/documents`);
+                const updated = (docsRes.data || []).find((d: DocumentItem) => d.id === doc.id);
+                setDocuments(docsRes.data || []);
+                if (updated && updated.parse_status !== 'parsing') break;
+            }
+            await fetchProjectData(id, { showLoader: false });
+        } catch (err: any) {
+            alert(`OCR 解析触发失败：${getApiErrorMessage(err, '请检查 PaddleOCR 配置。')}`);
+        } finally {
+            setOcrLoading(prev => ({ ...prev, [doc.id]: false }));
+        }
+    };
+
+    const handleDownloadMarkdown = (doc: DocumentItem) => {
+        if (!doc.ocr_markdown) return;
+        const blob = new Blob([doc.ocr_markdown], { type: 'text/markdown;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = doc.original_filename.replace(/\.[^/.]+$/, '') + '_ocr.md';
+        a.click();
+        URL.revokeObjectURL(url);
     };
 
     const handleDownloadImage = async (imageId: string) => {
@@ -462,13 +507,41 @@ export function ProjectWorkspace() {
 
     const renderParsedStructure = () => {
         const parsedDoc = documents.find((d) => d.parse_status === 'completed' && Array.isArray(d.sections) && d.sections.length > 0);
-        if (!parsedDoc) return <div className="text-sm text-muted-foreground">上传文档并等待解析完成后，这里会显示章节结构。</div>;
+
+        // Show loading/error states for any document being parsed
+        const parsingDoc = documents.find((d) => d.parse_status === 'parsing' || d.parse_status === 'pending');
+        const failedDoc = documents.find((d) => d.parse_status === 'failed');
+
+        if (!parsedDoc) {
+            return (
+                <div className="space-y-3 py-2">
+                    {parsingDoc && (
+                        <div className="flex items-center gap-2 p-3 bg-blue-50 border border-blue-200 rounded-lg text-blue-700 text-sm">
+                            <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                            <span>正在解析 <strong>{parsingDoc.original_filename}</strong>，请稍候…</span>
+                        </div>
+                    )}
+                    {failedDoc && (
+                        <div className="flex items-start gap-2 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
+                            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                            <div>
+                                <p className="font-medium">解析失败：{failedDoc.original_filename}</p>
+                                {failedDoc.parse_error && <p className="text-xs mt-1 opacity-80">{failedDoc.parse_error}</p>}
+                            </div>
+                        </div>
+                    )}
+                    {!parsingDoc && !failedDoc && (
+                        <div className="text-sm text-muted-foreground py-4 text-center">上传文档并等待解析完成后，这里会显示章节结构。</div>
+                    )}
+                </div>
+            );
+        }
 
         const sections = parsedDoc.sections || [];
         const roots = buildSectionTree(sections);
-
         const allIndices = sections.map((_, idx) => idx);
         const selectedSet = new Set(selectedSectionIndices);
+        const isOcr = !!parsedDoc.ocr_markdown;
 
         const selectMany = (indices: number[], checked: boolean) => {
             setSelectedSectionIndices((prev) => {
@@ -481,34 +554,46 @@ export function ProjectWorkspace() {
             });
         };
 
-        const renderNodes = (nodes: SectionNode[], depth: number) => {
+        const activeSection = activePreviewIdx !== null ? sections[activePreviewIdx] : null;
+        const selectedCharCount = selectedSectionIndices.reduce((acc, idx) => {
+            const s = sections[idx];
+            return acc + ((s?.content || s?.text || '') as string).length;
+        }, 0);
+
+        const renderNodes = (nodes: SectionNode[], depth: number): JSX.Element[] => {
             return nodes.map((node) => {
                 const key = `node-${node.idx}`;
                 const isChecked = selectedSet.has(node.idx);
-                const indentPx = depth * 14;
+                const isActive = activePreviewIdx === node.idx;
+                const indentPx = depth * 16;
 
                 return (
                     <div key={key}>
                         <div
-                            className="flex items-start space-x-2 p-3 bg-background/60 rounded border"
+                            className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer transition-colors ${isActive ? 'bg-primary/10 border border-primary/30' : 'hover:bg-muted/50'}`}
                             style={{ marginLeft: `${indentPx}px` }}
                         >
                             <input
                                 type="checkbox"
-                                className="mt-1"
+                                className="shrink-0 accent-primary"
                                 checked={isChecked}
-                                onChange={(e) => selectMany([node.idx], e.target.checked)}
+                                onChange={(e) => { e.stopPropagation(); selectMany([node.idx], e.target.checked); }}
+                                onClick={(e) => e.stopPropagation()}
                             />
-                            <div className="min-w-0">
-                                <p className="text-sm font-medium leading-none truncate">{node.title}</p>
-                                {node.preview && node.children.length === 0 && (
-                                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{node.preview}</p>
-                                )}
-                            </div>
+                            <span
+                                className={`text-sm flex-1 truncate ${depth === 0 ? 'font-medium' : 'text-muted-foreground'} ${isActive ? 'text-primary font-medium' : ''}`}
+                                onClick={() => setActivePreviewIdx(isActive ? null : node.idx)}
+                                title={node.title}
+                            >
+                                {node.title}
+                            </span>
+                            <Eye
+                                className={`w-3.5 h-3.5 shrink-0 transition-opacity ${isActive ? 'opacity-100 text-primary' : 'opacity-0 group-hover:opacity-50'}`}
+                                onClick={() => setActivePreviewIdx(isActive ? null : node.idx)}
+                            />
                         </div>
-
                         {node.children.length > 0 && (
-                            <div className="mt-2 space-y-2">
+                            <div className="mt-0.5 space-y-0.5">
                                 {renderNodes(node.children, depth + 1)}
                             </div>
                         )}
@@ -518,125 +603,135 @@ export function ProjectWorkspace() {
         };
 
         return (
-            <div className="space-y-2">
-                <div className="flex items-center justify-between gap-2 mb-2">
-                    <div className="text-xs text-muted-foreground">
-                        已选择 {selectedSectionIndices.length}/{sections.length} 段
-                    </div>
-                    <div className="flex items-center gap-2">
-                        <Button
-                            variant="outline"
-                            size="sm"
+            <div className="flex flex-col h-full gap-0">
+                {/* Toolbar */}
+                <div className="flex items-center justify-between gap-2 px-1 pb-2 border-b shrink-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                        <button
+                            className="text-xs px-2 py-1 rounded border hover:bg-muted transition-colors"
                             onClick={() => selectMany(allIndices, true)}
-                        >
-                            全选
-                        </Button>
-                        <Button
-                            variant="outline"
-                            size="sm"
+                        >全选</button>
+                        <button
+                            className="text-xs px-2 py-1 rounded border hover:bg-muted transition-colors"
                             onClick={() => selectMany(allIndices, false)}
-                        >
-                            全不选
-                        </Button>
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                                const next: Record<string, boolean> = {};
-                                for (const r of roots) next[`sec-${r.idx}`] = false;
-                                setCollapsedGroups(next);
-                            }}
-                        >
-                            展开
-                        </Button>
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                                const next: Record<string, boolean> = {};
-                                for (const r of roots) next[`sec-${r.idx}`] = true;
-                                setCollapsedGroups(next);
-                            }}
-                        >
-                            折叠
-                        </Button>
+                        >全不选</button>
+                        <button
+                            className="text-xs px-2 py-1 rounded border hover:bg-muted transition-colors"
+                            onClick={() => { const n: Record<string, boolean> = {}; for (const r of roots) n[`sec-${r.idx}`] = false; setCollapsedGroups(n); }}
+                        >展开全部</button>
+                        <button
+                            className="text-xs px-2 py-1 rounded border hover:bg-muted transition-colors"
+                            onClick={() => { const n: Record<string, boolean> = {}; for (const r of roots) n[`sec-${r.idx}`] = true; setCollapsedGroups(n); }}
+                        >折叠全部</button>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                        {isOcr && (
+                            <button
+                                className="flex items-center gap-1 text-xs px-2 py-1 rounded border border-blue-300 text-blue-600 hover:bg-blue-50 transition-colors"
+                                onClick={() => handleDownloadMarkdown(parsedDoc)}
+                                title="下载 OCR Markdown"
+                            >
+                                <FileDown className="w-3.5 h-3.5" />
+                                <span>下载 MD</span>
+                            </button>
+                        )}
                     </div>
                 </div>
 
-                <div className="space-y-2">
-                    {roots.map((chapter) => {
-                        const indices = collectIndices(chapter);
-                        const selectedCount = indices.reduce((acc, i) => acc + (selectedSet.has(i) ? 1 : 0), 0);
-                        const allChecked = selectedCount === indices.length && indices.length > 0;
-                        const partiallyChecked = selectedCount > 0 && selectedCount < indices.length;
-                        const groupKey = `sec-${chapter.idx}`;
-                        const isCollapsed = collapsedGroups[groupKey] ?? true;
+                {/* Status bar */}
+                <div className="flex items-center gap-3 px-1 py-1.5 text-xs text-muted-foreground border-b shrink-0">
+                    <span className="flex items-center gap-1">
+                        {isOcr
+                            ? <><ScanText className="w-3 h-3 text-blue-500" /><span className="text-blue-600 font-medium">PaddleOCR</span></>
+                            : <><FileText className="w-3 h-3" /><span>结构解析</span></>
+                        }
+                    </span>
+                    {parsedDoc.page_count && <span>{parsedDoc.page_count} 页</span>}
+                    <span className="ml-auto font-medium text-foreground">{selectedSectionIndices.length}/{sections.length} 段已选</span>
+                    {selectedCharCount > 0 && <span>≈ {(selectedCharCount / 500).toFixed(0)} 段落</span>}
+                </div>
 
-                        return (
-                            <details
-                                key={groupKey}
-                                open={!isCollapsed}
-                                className="rounded border bg-muted/20"
-                                onToggle={(e) => {
-                                    const open = (e.currentTarget as HTMLDetailsElement).open;
-                                    setCollapsedGroups((prev) => ({ ...prev, [groupKey]: !open }));
-                                }}
-                            >
-                                <summary className="cursor-pointer select-none list-none px-3 py-2 flex items-center justify-between">
-                                    <div className="flex items-center gap-2 min-w-0">
+                {/* Main content: left tree + right preview */}
+                <div className="flex-1 overflow-hidden flex min-h-0">
+                    {/* Left: section tree */}
+                    <div className="w-[55%] overflow-y-auto pr-1 border-r py-2 space-y-0.5">
+                        {roots.map((chapter) => {
+                            const indices = collectIndices(chapter);
+                            const selectedCount = indices.reduce((acc, i) => acc + (selectedSet.has(i) ? 1 : 0), 0);
+                            const allChecked = selectedCount === indices.length && indices.length > 0;
+                            const partiallyChecked = selectedCount > 0 && selectedCount < indices.length;
+                            const groupKey = `sec-${chapter.idx}`;
+                            const isCollapsed = collapsedGroups[groupKey] ?? true;
+                            const isActive = activePreviewIdx === chapter.idx;
+
+                            return (
+                                <div key={groupKey}>
+                                    <div className={`flex items-center gap-2 px-2 py-2 rounded cursor-pointer transition-colors ${isActive ? 'bg-primary/10 border border-primary/30' : 'hover:bg-muted/50'}`}>
                                         <input
                                             type="checkbox"
-                                            className="mt-0.5"
+                                            className="shrink-0 accent-primary"
                                             checked={allChecked}
-                                            ref={(el) => {
-                                                if (el) el.indeterminate = partiallyChecked;
-                                            }}
-                                            onClick={(e) => e.stopPropagation()}
+                                            ref={(el) => { if (el) el.indeterminate = partiallyChecked; }}
                                             onChange={(e) => selectMany(indices, e.target.checked)}
+                                            onClick={(e) => e.stopPropagation()}
                                         />
-                                        <div className="min-w-0">
-                                            <div className="text-sm font-medium truncate">{chapter.title}</div>
-                                            <div className="text-xs text-muted-foreground">
-                                                {selectedCount}/{indices.length} 已选
-                                            </div>
-                                        </div>
+                                        <span
+                                            className={`text-sm font-semibold flex-1 min-w-0 truncate ${isActive ? 'text-primary' : ''}`}
+                                            onClick={() => setActivePreviewIdx(isActive ? null : chapter.idx)}
+                                            title={chapter.title}
+                                        >
+                                            {chapter.title}
+                                        </span>
+                                        <span className="text-xs text-muted-foreground shrink-0">{selectedCount}/{indices.length}</span>
+                                        <button
+                                            className="text-muted-foreground hover:text-foreground shrink-0"
+                                            onClick={() => setCollapsedGroups(prev => ({ ...prev, [groupKey]: !isCollapsed }))}
+                                        >
+                                            {isCollapsed
+                                                ? <ChevronRight className="w-3.5 h-3.5" />
+                                                : <ChevronLeft className="w-3.5 h-3.5 rotate-90" />
+                                            }
+                                        </button>
                                     </div>
-                                    <Badge variant="secondary">{indices.length}</Badge>
-                                </summary>
-
-                                <div className="px-3 pb-3 space-y-2">
-                                    <div className="space-y-2">
-                                        <div className="flex items-start space-x-2 p-3 bg-background/60 rounded border">
-                                            <input
-                                                type="checkbox"
-                                                className="mt-1"
-                                                checked={selectedSet.has(chapter.idx)}
-                                                onChange={(e) => selectMany([chapter.idx], e.target.checked)}
-                                            />
-                                            <div className="min-w-0">
-                                                <p className="text-sm font-medium leading-none truncate">
-                                                    {chapter.title}（章节内容）
-                                                </p>
-                                                {chapter.preview && (
-                                                    <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
-                                                        {chapter.preview}
-                                                    </p>
-                                                )}
-                                            </div>
+                                    {!isCollapsed && chapter.children.length > 0 && (
+                                        <div className="mt-0.5 space-y-0.5">
+                                            {renderNodes(chapter.children, 1)}
                                         </div>
+                                    )}
+                                    {!isCollapsed && chapter.children.length === 0 && (
+                                        <div className="ml-7 py-1 text-xs text-muted-foreground">无子章节</div>
+                                    )}
+                                </div>
+                            );
+                        })}
+                    </div>
 
-                                        {chapter.children.length ? (
-                                            renderNodes(chapter.children, 1)
-                                        ) : (
-                                            <div className="text-xs text-muted-foreground py-2">
-                                                该章节下未识别到小节（文档可能是纯段落/无标题结构）。
-                                            </div>
+                    {/* Right: content preview */}
+                    <div className="w-[45%] overflow-y-auto pl-3 py-2">
+                        {activeSection ? (
+                            <div>
+                                <div className="flex items-start gap-2 mb-3">
+                                    <div>
+                                        <h4 className="text-sm font-semibold leading-tight">{(activeSection as any).title || `Section ${activePreviewIdx! + 1}`}</h4>
+                                        {(activeSection as any).page_start != null && (
+                                            <span className="text-xs text-muted-foreground">第 {(activeSection as any).page_start + 1} 页</span>
                                         )}
                                     </div>
                                 </div>
-                            </details>
-                        );
-                    })}
+                                <div className="text-xs text-foreground/80 leading-relaxed whitespace-pre-wrap break-words">
+                                    {((activeSection as any).content || (activeSection as any).text || '（无内容预览）').slice(0, 2000)}
+                                    {((activeSection as any).content || (activeSection as any).text || '').length > 2000 && (
+                                        <span className="text-muted-foreground italic">…（内容较长，已截断）</span>
+                                    )}
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="flex flex-col items-center justify-center h-full text-center text-muted-foreground gap-2 py-8">
+                                <Eye className="w-8 h-8 opacity-30" />
+                                <p className="text-xs">点击左侧章节标题<br/>在此预览内容</p>
+                            </div>
+                        )}
+                    </div>
                 </div>
             </div>
         );
@@ -647,7 +742,7 @@ export function ProjectWorkspace() {
 
             {/* Column 1: Parsed Structure (primary) */}
             {showStructure ? (
-                <Card className="w-[420px] xl:w-[480px] 2xl:w-[540px] flex flex-col h-full border-r shadow-none shrink-0">
+                <Card className="w-[520px] xl:w-[600px] 2xl:w-[680px] flex flex-col h-full border-r shadow-none shrink-0">
                     <CardHeader className="bg-muted/30 border-b py-4">
                         <div className="flex items-center justify-between">
                             <CardTitle className="text-lg flex items-center">
@@ -665,19 +760,19 @@ export function ProjectWorkspace() {
                         </div>
                     </CardHeader>
                     <CardContent className="flex-1 overflow-hidden p-0 flex flex-col">
-                        <div className="px-4 py-3 border-b bg-background">
+                        <div className="px-4 py-2 border-b bg-background shrink-0">
                             <div className="text-xs text-muted-foreground">
-                                用于限定提示词生成范围（按章节折叠选择）。
+                                勾选章节以限定提示词生成范围，点击标题可预览内容。
                                 {imagePricing && (
-                                    <span className="ml-2">
-                                        当前价格：1K ¥{imagePricing.price_cny_1k.toFixed(2)}/张 · 2K ¥{imagePricing.price_cny_2k.toFixed(2)}/张 · 4K ¥{imagePricing.price_cny_4k.toFixed(2)}/张
+                                    <span className="ml-1">
+                                        · 1K ¥{imagePricing.price_cny_1k.toFixed(2)} · 2K ¥{imagePricing.price_cny_2k.toFixed(2)} · 4K ¥{imagePricing.price_cny_4k.toFixed(2)}/张
                                     </span>
                                 )}
                             </div>
                         </div>
-                        <ScrollArea className="flex-1 p-4">
+                        <div className="flex-1 overflow-hidden p-4 flex flex-col">
                             {renderParsedStructure()}
-                        </ScrollArea>
+                        </div>
                     </CardContent>
                 </Card>
             ) : (
@@ -787,16 +882,59 @@ export function ProjectWorkspace() {
                             ) : (
                                 <div className="space-y-2">
                                     {documents.map((doc) => (
-                                        <div key={doc.id} className="flex items-start justify-between gap-2 p-3 bg-muted/20 rounded border">
-                                            <div className="min-w-0">
-                                                <p className="text-sm font-medium truncate">{doc.original_filename}</p>
-                                                {doc.parse_status === 'failed' && doc.parse_error && (
-                                                    <p className="text-xs text-destructive mt-1 line-clamp-2">{doc.parse_error}</p>
-                                                )}
+                                        <div key={doc.id} className="p-3 bg-muted/20 rounded border space-y-2">
+                                            <div className="flex items-start justify-between gap-2">
+                                                <div className="min-w-0">
+                                                    <p className="text-sm font-medium truncate">{doc.original_filename}</p>
+                                                    {doc.parse_status === 'failed' && doc.parse_error && (
+                                                        <p className="text-xs text-destructive mt-1 line-clamp-2">{doc.parse_error}</p>
+                                                    )}
+                                                    {doc.parse_status === 'completed' && doc.ocr_markdown && (
+                                                        <p className="text-xs text-blue-600 mt-0.5 flex items-center gap-1">
+                                                            <ScanText className="w-3 h-3" /> PaddleOCR 解析
+                                                        </p>
+                                                    )}
+                                                </div>
+                                                <div className="flex items-center gap-1.5 shrink-0">
+                                                    {(doc.parse_status === 'parsing' || doc.parse_status === 'pending') && (
+                                                        <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                                                    )}
+                                                    {doc.parse_status === 'completed' && <CheckCircle2 className="w-4 h-4 text-green-500" />}
+                                                    {doc.parse_status === 'failed' && <AlertCircle className="w-4 h-4 text-destructive" />}
+                                                    <Badge variant={doc.parse_status === 'completed' ? 'secondary' : doc.parse_status === 'failed' ? 'destructive' : 'outline'} className="text-xs">
+                                                        {doc.parse_status === 'completed' ? '已解析' : doc.parse_status === 'failed' ? '失败' : doc.parse_status === 'parsing' ? '解析中' : '待解析'}
+                                                    </Badge>
+                                                </div>
                                             </div>
-                                            <Badge variant={doc.parse_status === 'completed' ? 'secondary' : doc.parse_status === 'failed' ? 'destructive' : 'outline'}>
-                                                {doc.parse_status}
-                                            </Badge>
+                                            {/* OCR button for PDFs */}
+                                            {doc.file_type === 'pdf' && (
+                                                <div className="flex items-center gap-2">
+                                                    <button
+                                                        className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border transition-colors ${
+                                                            user?.paddleocr_api_key_set && user?.paddleocr_server_url
+                                                                ? 'border-blue-300 text-blue-600 hover:bg-blue-50 cursor-pointer'
+                                                                : 'border-muted text-muted-foreground cursor-not-allowed opacity-50'
+                                                        }`}
+                                                        disabled={!user?.paddleocr_api_key_set || !user?.paddleocr_server_url || ocrLoading[doc.id] || doc.parse_status === 'parsing'}
+                                                        onClick={() => handleTriggerOcr(doc)}
+                                                        title={!user?.paddleocr_api_key_set || !user?.paddleocr_server_url ? '请先在设置页配置 PaddleOCR Server URL 和 Token' : 'OCR 解析此 PDF'}
+                                                    >
+                                                        {ocrLoading[doc.id]
+                                                            ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                                            : <ScanText className="w-3.5 h-3.5" />
+                                                        }
+                                                        {ocrLoading[doc.id] ? 'OCR 解析中…' : 'OCR 重新解析'}
+                                                    </button>
+                                                    {doc.ocr_markdown && (
+                                                        <button
+                                                            className="flex items-center gap-1 text-xs px-2 py-1.5 rounded border border-muted text-muted-foreground hover:bg-muted transition-colors"
+                                                            onClick={() => handleDownloadMarkdown(doc)}
+                                                        >
+                                                            <FileDown className="w-3.5 h-3.5" /> 下载 MD
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            )}
                                         </div>
                                     ))}
                                 </div>

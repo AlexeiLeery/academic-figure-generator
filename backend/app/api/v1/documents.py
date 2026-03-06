@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import (
+    BadRequestException,
     ForbiddenException,
     NotFoundException,
 )
@@ -137,5 +138,55 @@ async def get_document(
         raise NotFoundException("Document not found")
     if document.user_id != user.id:
         raise ForbiddenException("Not your document")
+
+    return DocumentResponse.model_validate(document)
+
+
+@router.post(
+    "/projects/{project_id}/documents/{document_id}/ocr",
+    response_model=DocumentResponse,
+)
+async def trigger_ocr(
+    project_id: UUID,
+    document_id: UUID,
+    user: User = Depends(get_current_active_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Trigger PaddleOCR re-parsing on an existing PDF document.
+
+    Requires the user to have a PaddleOCR server URL and token configured
+    in their settings.  Only supported for PDF files.  Returns the updated
+    Document record (with parse_status='parsing').
+    """
+    await _get_owned_project(project_id, user, db)
+
+    result = await db.execute(select(Document).where(Document.id == document_id))
+    document: Document | None = result.scalar_one_or_none()
+    if document is None:
+        raise NotFoundException("Document not found")
+    if document.user_id != user.id:
+        raise ForbiddenException("Not your document")
+    if document.file_type != "pdf":
+        raise BadRequestException("OCR 仅支持 PDF 文件")
+    if document.parse_status == "parsing":
+        raise BadRequestException("文档正在解析中，请稍后再试")
+
+    if not user.paddleocr_server_url or not user.paddleocr_token_enc:
+        raise BadRequestException(
+            "请先在「设置」页面配置 PaddleOCR Server URL 和 Access Token"
+        )
+
+    # Reset parse status to pending before dispatching
+    document.parse_status = "parsing"
+    document.parse_error = None
+    db.add(document)
+    await db.flush()
+    await db.refresh(document)
+
+    celery_app.send_task(
+        "app.tasks.ocr_tasks.run_paddleocr_task",
+        args=[str(document.id), str(user.id)],
+        queue="default",
+    )
 
     return DocumentResponse.model_validate(document)

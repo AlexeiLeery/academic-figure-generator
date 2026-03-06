@@ -45,8 +45,10 @@ class UserResponse(BaseModel):
     default_aspect_ratio: str
     claude_api_key_set: bool
     nanobanana_api_key_set: bool
+    paddleocr_api_key_set: bool = False
     claude_api_base_url: str | None = None
     nanobanana_api_base_url: str | None = None
+    paddleocr_server_url: str | None = None
     claude_tokens_quota: int
     nanobanana_images_quota: int
     linuxdo_id: int | None = None
@@ -62,8 +64,10 @@ class UserUpdate(BaseModel):
     default_aspect_ratio: str | None = None
     claude_api_key: str | None = None
     nanobanana_api_key: str | None = None
+    paddleocr_api_key: str | None = None
     claude_api_base_url: str | None = None
     nanobanana_api_base_url: str | None = None
+    paddleocr_server_url: str | None = None
 
 
 class ChangePassword(BaseModel):

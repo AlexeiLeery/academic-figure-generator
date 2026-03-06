@@ -25,4 +25,5 @@ class DocumentResponse(BaseModel):
     sections: list[dict] | None
     parse_status: str
     parse_error: str | None
+    ocr_markdown: str | None = None
     created_at: datetime

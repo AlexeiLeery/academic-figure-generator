@@ -12,8 +12,10 @@ export interface User {
     default_aspect_ratio?: string | null;
     claude_api_key_set?: boolean;
     nanobanana_api_key_set?: boolean;
+    paddleocr_api_key_set?: boolean;
     claude_api_base_url?: string | null;
     nanobanana_api_base_url?: string | null;
+    paddleocr_server_url?: string | null;
     claude_tokens_quota?: number;
     nanobanana_images_quota?: number;
     linuxdo_id?: number | null;
