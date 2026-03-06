@@ -1,19 +1,56 @@
 # Academic Figure Generator
 
+![Python](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?logo=fastapi&logoColor=white)
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-green)
+
 AI 驱动的学术论文配图生成平台。上传论文 → AI 分析内容生成 Prompt → 一键生成高质量科研配图。
+
+> **一句话**：把"写完论文还要画图"的痛点，变成「上传 → 确认 → 下载」三步流程。
+
+## 示例配图
+
+以下均为本平台实际生成的学术配图示例：
+
+<table>
+<tr>
+<td align="center" width="50%">
+<img src="docs/images/example-architecture.png" alt="网络架构图示例" />
+<br/><sub><b>PMST 预测网络架构图</b></sub>
+</td>
+<td align="center" width="50%">
+<img src="docs/images/example-signal.png" alt="信号处理流程图示例" />
+<br/><sub><b>时频域信号处理流程图</b></sub>
+</td>
+</tr>
+<tr>
+<td align="center" width="50%">
+<img src="docs/images/example-network.png" alt="深度学习模块详图示例" />
+<br/><sub><b>深度学习模块详解图</b></sub>
+</td>
+<td align="center" width="50%">
+<img src="docs/images/example-anatomy.png" alt="带标注的解剖图示例" />
+<br/><sub><b>带标注的解剖结构图</b></sub>
+</td>
+</tr>
+</table>
 
 ## 功能特性
 
-- **智能 Prompt 生成** — 上传 PDF/DOCX/TXT 论文，Claude AI 自动分析内容并生成配图描述
-- **高质量配图** — 支持 1K/2K/4K 多分辨率，16:9/4:3/1:1 等多种比例
-- **配色方案** — 50+ 预设学术配色（含色盲友好方案），支持自定义配色
-- **图生图编辑** — 基于已有图片 + 文字指令进行二次编辑
-- **实时状态** — SSE 流式推送生成进度，无需手动刷新
-- **项目管理** — 按项目组织论文、Prompt 和配图
-- **多用户** — 完整的注册/登录体系，支持 Linux DO OAuth 登录
-- **BYOK** — 用户可配置自己的 API Key（Claude / NanoBanana），也可使用平台统一 Key
-- **计费系统** — 统一余额 (CNY) 计费，支持 Linux DO 积分自助充值
-- **管理后台** — API Key 管理、计费配置、用户管理、用量统计
+| 功能 | 说明 |
+|------|------|
+| 🤖 **智能 Prompt 生成** | 上传 PDF/DOCX/TXT 论文，Claude AI 自动分析内容并生成配图描述 |
+| 🖼️ **高质量配图** | 支持 1K/2K/4K 多分辨率，16:9/4:3/1:1 等多种比例 |
+| 🎨 **配色方案** | 50+ 预设学术配色（含色盲友好方案），支持自定义配色 |
+| ✏️ **图生图编辑** | 基于已有图片 + 文字指令进行二次编辑 |
+| ⚡ **实时状态** | SSE 流式推送生成进度，无需手动刷新 |
+| 📁 **项目管理** | 按项目组织论文、Prompt 和配图 |
+| 👥 **多用户** | 完整的注册/登录体系，支持 Linux DO OAuth 登录 |
+| 🔑 **BYOK** | 用户可配置自己的 API Key（Claude / NanoBanana），也可使用平台统一 Key |
+| 💰 **计费系统** | 统一余额 (CNY) 计费，支持 Linux DO 积分自助充值 |
+| 🛠️ **管理后台** | API Key 管理、计费配置、用户管理、用量统计 |
 
 ## 技术栈
 
@@ -70,7 +107,7 @@ academic-figure-generator/
 ### 1. 克隆仓库
 
 ```bash
-git clone https://github.com/你的用户名/academic-figure-generator.git
+git clone https://github.com/LigphiDonk/academic-figure-generator.git
 cd academic-figure-generator
 ```
 

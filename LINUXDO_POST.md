@@ -39,7 +39,7 @@
 ## 部署超简单
 
 ```bash
-git clone https://github.com/你的用户名/academic-figure-generator.git
+git clone https://github.com/LigphiDonk/academic-figure-generator.git
 cd academic-figure-generator
 cp .env.docker.example .env
 # 编辑 .env 填入密码和密钥
