@@ -3,6 +3,7 @@ name = "academic-figure-generator"
 version = "0.1.0"
 description = "Academic Figure Generator - AI-powered scientific paper illustration service"
 readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.12"
 dependencies = [
     # Web framework

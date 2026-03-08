@@ -4,7 +4,7 @@
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?logo=fastapi&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
 ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
-![License](https://img.shields.io/badge/License-MIT-green)
+[![License](https://img.shields.io/badge/License-MIT-green)](./LICENSE)
 
 AI 驱动的学术论文配图生成平台。上传论文 → AI 分析内容生成 Prompt → 一键生成高质量科研配图。
 
@@ -372,4 +372,8 @@ npm run lint    # ESLint 检查
 
 ## 许可证
 
-MIT License
+本项目基于 [MIT License](./LICENSE) 开源。
+
+这意味着你可以在保留原始版权和许可证声明的前提下，自由使用、修改、分发和商业化本项目。
+
+项目依赖的第三方库仍分别遵循其各自的许可证条款。
