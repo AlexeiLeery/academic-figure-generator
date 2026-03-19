@@ -59,6 +59,73 @@ AI 驱动的学术论文配图生成平台。上传论文 → AI 分析内容生
 | 💰 **计费系统** | 统一余额 (CNY) 计费，支持 Linux DO 积分自助充值 |
 | 🛠️ **管理后台** | API Key 管理、计费配置、用户管理、用量统计 |
 
+## AI 学术配图 Prompt 技能（AI Coding Agent Skill）
+
+本项目附带了一个独立的 **AI Coding Agent Skill**——`academic-figure-prompt`，兼容多种 AI 编程助手（Claude Code / Gemini CLI / Cursor 等），无需部署完整平台即可获得顶会级学术论文配图提示词生成能力。
+
+### 功能简介
+
+`academic-figure-prompt` 是一个专为学术论文设计的 AI 提示词生成器，能够：
+
+- 📄 阅读并分析论文内容（PDF / LaTeX / Word）
+- 🎨 提供 **8 种预设学术配色方案**（Okabe-Ito、Blue 单色系、Teal+Amber 等），含色盲友好选项
+- 🖼️ 生成极其详细的英文提示词，用于 AI 图片工具（NanoBanana / Gemini / DALL-E / Midjourney）生成顶会级别的专业配图
+- 📐 覆盖多种图表类型：框架图、网络架构图、模块详解图、对比/消融图、数据模板图
+
+### 安装方式
+
+#### 方式 1：使用 npx skills 一键安装（推荐）
+
+```bash
+npx skills add LigphiDonk/academic-figure-generator
+```
+
+该命令会自动将 `academic-figure-prompt` skill 安装到当前项目中，适用于所有支持 Skills 的 AI 编程助手。
+
+#### 方式 2：手动安装
+
+```bash
+# 克隆仓库
+git clone https://github.com/LigphiDonk/academic-figure-generator.git
+
+# 将 skill 目录复制到你的项目中（Gemini CLI）
+cp -r academic-figure-generator/academic-figure-prompt .gemini/skills/
+# 或者对于 Claude Code
+cp -r academic-figure-generator/academic-figure-prompt .claude/skills/
+```
+
+### 使用方法
+
+安装后，在 AI 编程助手对话中直接触发即可。Skill 会在检测到以下关键词时自动激活：
+
+| 触发关键词 | 说明 |
+|------------|------|
+| `论文配图提示词` / `生成论文配图` | 为论文生成配图提示词 |
+| `学术论文生图` / `架构图提示词` | 生成架构图/框架图提示词 |
+| `顶会风格配图` / `CVPR 风格图` / `NeurIPS 风格图` | 指定顶会风格 |
+| `paper figure prompt` / `academic diagram prompt` | 英文触发 |
+
+**示例对话：**
+
+```
+You: 帮我看一下这篇论文，生成论文配图提示词
+AI:  [分析论文内容 → 展示配色方案选择 → 生成详细英文提示词]
+
+You: 用 Teal+Amber 配色，帮我画一个网络架构图的提示词
+AI:  [直接使用方案C生成网络架构图提示词]
+```
+
+### 工作流程
+
+1. **上传/指定论文** → Skill 自动解析论文内容和结构
+2. **选择配色方案** → 从 8 种预设方案中选择，或自定义色值
+3. **生成提示词** → 自动生成包含完整层次结构的详细英文提示词
+4. **质量自检** → 按照内置清单自动检查信息密度、色彩、标注等
+
+> 💡 **提示**：生成的提示词可直接用于 NanoBanana / Gemini / DALL-E / Midjourney 等 AI 图片生成工具，生成效果最佳的是 NanoBanana。
+
+---
+
 ## 技术栈
 
 | 层级 | 技术 |
