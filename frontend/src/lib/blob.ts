@@ -1,4 +1,4 @@
-import { api } from './api';
+import api from './api';
 
 function extFromContentType(contentType: string): string {
     const ct = contentType.toLowerCase();

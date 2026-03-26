@@ -1,44 +1,35 @@
+"""Image model — personal-use version (no user_id)."""
+
+from __future__ import annotations
+
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import BigInteger, ForeignKey, Index, Integer, String, Text
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy import BigInteger, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from .base import Base, TimestampMixin
+from .base import Base, TimestampMixin, new_uuid
 
 if TYPE_CHECKING:
     from .project import Project
     from .prompt import Prompt
-    from .user import User
 
 
 class Image(Base, TimestampMixin):
     __tablename__ = "images"
 
-    __table_args__ = (
-        Index("ix_images_prompt_id", "prompt_id"),
-        Index("ix_images_project_id", "project_id"),
-        Index("ix_images_user_id", "user_id"),
-    )
-
-    id: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True),
+    id: Mapped[str] = mapped_column(
+        String(36),
         primary_key=True,
-        server_default="gen_random_uuid()",
+        default=new_uuid,
     )
-    prompt_id: Mapped[Optional[UUID]] = mapped_column(
-        UUID(as_uuid=True),
+    prompt_id: Mapped[Optional[str]] = mapped_column(
+        String(36),
         ForeignKey("prompts.id", ondelete="SET NULL"),
         nullable=True,
     )
-    project_id: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True),
+    project_id: Mapped[str] = mapped_column(
+        String(36),
         ForeignKey("projects.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    user_id: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
     resolution: Mapped[str] = mapped_column(
@@ -56,7 +47,7 @@ class Image(Base, TimestampMixin):
         nullable=True,
     )
     custom_colors: Mapped[Optional[dict]] = mapped_column(
-        JSONB,
+        JSON,
         nullable=True,
     )
     reference_image_path: Mapped[Optional[str]] = mapped_column(
@@ -83,11 +74,6 @@ class Image(Base, TimestampMixin):
         Integer,
         nullable=True,
     )
-    generation_task_id: Mapped[Optional[str]] = mapped_column(
-        String(100),
-        nullable=True,
-        comment="Celery task ID",
-    )
     generation_status: Mapped[str] = mapped_column(
         String(20),
         default="pending",
@@ -100,7 +86,7 @@ class Image(Base, TimestampMixin):
     generation_error: Mapped[Optional[str]] = mapped_column(
         Text,
         nullable=True,
-        comment="Failure reason for generation (best-effort).",
+        comment="Failure reason for generation.",
     )
     final_prompt_sent: Mapped[Optional[str]] = mapped_column(
         Text,
@@ -115,4 +101,3 @@ class Image(Base, TimestampMixin):
     # Relationships
     prompt: Mapped[Optional["Prompt"]] = relationship("Prompt", back_populates="images")
     project: Mapped["Project"] = relationship("Project", back_populates="images")
-    user: Mapped["User"] = relationship("User", back_populates="images")

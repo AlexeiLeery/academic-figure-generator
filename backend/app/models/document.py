@@ -1,37 +1,29 @@
+"""Document model — personal-use version (no user_id)."""
+
+from __future__ import annotations
+
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import BigInteger, ForeignKey, Index, Integer, String, Text
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy import BigInteger, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from .base import Base, TimestampMixin
+from .base import Base, TimestampMixin, new_uuid
 
 if TYPE_CHECKING:
     from .project import Project
-    from .user import User
 
 
 class Document(Base, TimestampMixin):
     __tablename__ = "documents"
 
-    __table_args__ = (
-        Index("ix_documents_project_id", "project_id"),
-        Index("ix_documents_user_id", "user_id"),
-    )
-
-    id: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True),
+    id: Mapped[str] = mapped_column(
+        String(36),
         primary_key=True,
-        server_default="gen_random_uuid()",
+        default=new_uuid,
     )
-    project_id: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True),
+    project_id: Mapped[str] = mapped_column(
+        String(36),
         ForeignKey("projects.id", ondelete="CASCADE"),
-        nullable=False,
-    )
-    user_id: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
     )
     original_filename: Mapped[str] = mapped_column(
@@ -56,7 +48,7 @@ class Document(Base, TimestampMixin):
         nullable=True,
     )
     sections: Mapped[Optional[dict]] = mapped_column(
-        JSONB,
+        JSON,
         nullable=True,
         comment="Parsed chapter structure",
     )
@@ -77,9 +69,8 @@ class Document(Base, TimestampMixin):
     ocr_markdown: Mapped[Optional[str]] = mapped_column(
         Text,
         nullable=True,
-        comment="Raw OCR Markdown output from PaddleOCR",
+        comment="Raw OCR Markdown output",
     )
 
     # Relationships
     project: Mapped["Project"] = relationship("Project", back_populates="documents")
-    user: Mapped["User"] = relationship("User", back_populates="documents")

@@ -1,5 +1,4 @@
 from datetime import datetime
-from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
@@ -11,15 +10,15 @@ class PromptGenerateRequest(BaseModel):
     figure_types: list[str] | None = None
     user_request: str | None = None
     max_figures: int | None = None
-    template_mode: bool = False  # Generate text-free structural templates only
+    template_mode: bool = False
 
 
 class PromptResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: UUID
-    project_id: UUID
-    document_id: UUID | None
+    id: str
+    project_id: str
+    document_id: str | None
     figure_number: int
     title: str | None
     original_prompt: str | None
@@ -41,6 +40,5 @@ class PromptUpdate(BaseModel):
 class PromptStatusResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: UUID
+    id: str
     generation_status: str
-    generation_task_id: str | None

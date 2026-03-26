@@ -1,5 +1,4 @@
 from datetime import datetime
-from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
@@ -17,7 +16,7 @@ class ColorValues(BaseModel):
     @field_validator("primary", "secondary", "tertiary", "text", "fill", "section_bg", "border", "arrow")
     @classmethod
     def validate_hex_color(cls, v: str) -> str:
-        import re
+        import re  # noqa: PLC0415
         if not re.match(r"^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$", v):
             raise ValueError(f"Invalid hex color: {v!r}. Must be #RGB or #RRGGBB format.")
         return v
@@ -31,8 +30,7 @@ class ColorSchemeCreate(BaseModel):
 class ColorSchemeResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: UUID
-    user_id: UUID | None
+    id: str
     name: str
     type: str
     colors: dict

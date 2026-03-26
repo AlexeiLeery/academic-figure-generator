@@ -28,29 +28,14 @@ class NotFoundException(AppException):
         super().__init__(status_code=404, detail=detail, error_code="NOT_FOUND")
 
 
-class UnauthorizedException(AppException):
-    def __init__(self, detail: str = "Authentication required") -> None:
-        super().__init__(status_code=401, detail=detail, error_code="UNAUTHORIZED")
-
-
-class ForbiddenException(AppException):
-    def __init__(self, detail: str = "Access forbidden") -> None:
-        super().__init__(status_code=403, detail=detail, error_code="FORBIDDEN")
-
-
 class BadRequestException(AppException):
     def __init__(self, detail: str = "Bad request") -> None:
         super().__init__(status_code=400, detail=detail, error_code="BAD_REQUEST")
 
 
-class InsufficientBalanceException(AppException):
-    def __init__(self, detail: str = "Insufficient balance") -> None:
-        super().__init__(status_code=400, detail=detail, error_code="INSUFFICIENT_BALANCE")
-
-
-class RateLimitException(AppException):
-    def __init__(self, detail: str = "Rate limit exceeded") -> None:
-        super().__init__(status_code=429, detail=detail, error_code="RATE_LIMIT_EXCEEDED")
+class ForbiddenException(AppException):
+    def __init__(self, detail: str = "Access forbidden") -> None:
+        super().__init__(status_code=403, detail=detail, error_code="FORBIDDEN")
 
 
 class FileValidationException(AppException):
@@ -87,7 +72,6 @@ def register_exception_handlers(app: FastAPI) -> None:
     """Register all custom exception handlers on the FastAPI app."""
     app.add_exception_handler(AppException, _app_exception_handler)  # type: ignore[arg-type]
 
-    # Catch-all for unhandled server errors in non-debug mode
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
         settings = get_settings()
         if settings.DEBUG:

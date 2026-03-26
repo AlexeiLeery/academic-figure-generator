@@ -1,18 +1,16 @@
-"""Database session management.
+"""Database helpers — SQLite version."""
 
-The canonical async engine and session factory are in app.dependencies.
-This module re-exports for convenience.
-"""
-# For Alembic and other tools that need sync access
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+
 from app.config import get_settings
 
 
 def get_sync_engine():
-    """Get sync engine for Alembic migrations and scripts."""
+    """Get sync engine for scripts."""
     settings = get_settings()
-    return create_engine(settings.DATABASE_URL_SYNC)
+    db_path = settings.DATABASE_PATH
+    return create_engine(f"sqlite:///{db_path}")
 
 
 def get_sync_session():

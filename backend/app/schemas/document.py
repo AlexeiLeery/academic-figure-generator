@@ -1,5 +1,4 @@
 from datetime import datetime
-from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
@@ -16,8 +15,8 @@ class SectionInfo(BaseModel):
 class DocumentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: UUID
-    project_id: UUID
+    id: str
+    project_id: str
     original_filename: str
     file_type: str
     file_size_bytes: int

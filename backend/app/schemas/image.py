@@ -1,5 +1,4 @@
 from datetime import datetime
-from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
@@ -15,11 +14,10 @@ class ImageDirectGenerateRequest(BaseModel):
     resolution: str = "2K"
     aspect_ratio: str = "16:9"
     color_scheme: str = "okabe-ito"
-    project_id: UUID | None = None
+    project_id: str | None = None
 
 
 class ImageEditRequest(BaseModel):
-    # reference_image is handled as a file upload in the endpoint
     edit_instruction: str
     resolution: str = "2K"
 
@@ -27,9 +25,9 @@ class ImageEditRequest(BaseModel):
 class ImageResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: UUID
-    prompt_id: UUID | None
-    project_id: UUID | None
+    id: str
+    prompt_id: str | None
+    project_id: str | None
     resolution: str
     aspect_ratio: str
     color_scheme: str | None
@@ -41,22 +39,13 @@ class ImageResponse(BaseModel):
     generation_duration_ms: int | None
     generation_error: str | None
     retry_count: int
-    download_url: str | None
+    download_url: str | None = None
     created_at: datetime
 
 
 class ImageStatusResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
-    id: UUID
+    id: str
     generation_status: str
-    generation_task_id: str | None
     generation_error: str | None = None
-
-
-class ImagePricingResponse(BaseModel):
-    currency: str = "CNY"
-    price_cny_default: float
-    price_cny_1k: float
-    price_cny_2k: float
-    price_cny_4k: float

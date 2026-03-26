@@ -2,10 +2,9 @@ import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { FileUp, FileText, Image as ImageIcon, Send, RefreshCw, Download, ChevronLeft, ChevronRight, ScanText, FileDown, AlertCircle, CheckCircle2, Loader2, Eye } from 'lucide-react';
 
-import { api } from '../lib/api';
+import api from '../lib/api';
 import { useProjectStore } from '../store/projectStore';
 import { fetchAuthedBlob, triggerBrowserDownload } from '../lib/blob';
-import { useAuthStore } from '../store/authStore';
 import { getApiErrorMessage } from '../lib/apiError';
 
 import { Button } from '../components/ui/button';
@@ -41,19 +40,10 @@ type PromptSettings = {
     colorScheme: string;
 };
 
-type ImagePricing = {
-    currency: string;
-    price_cny_default: number;
-    price_cny_1k: number;
-    price_cny_2k: number;
-    price_cny_4k: number;
-};
-
 export function ProjectWorkspace() {
     const { id } = useParams<{ id: string }>();
     const navigate = useNavigate();
     const { currentProject, setCurrentProject } = useProjectStore();
-    const token = useAuthStore((s) => s.token);
 
     const [isInitialLoading, setIsInitialLoading] = useState(true);
     const [isRefreshing, setIsRefreshing] = useState(false);
@@ -82,7 +72,6 @@ export function ProjectWorkspace() {
     const structureInitRef = useRef<string | null>(null);
     const [ocrLoading, setOcrLoading] = useState<Record<string, boolean>>({});
     const [activePreviewIdx, setActivePreviewIdx] = useState<number | null>(null);
-    const user = useAuthStore((s) => s.user);
 
     type SectionNode = {
         idx: number;
@@ -161,16 +150,6 @@ export function ProjectWorkspace() {
     const [editInstructions, setEditInstructions] = useState<Record<string, string>>({});
     const [isEditing, setIsEditing] = useState<Record<string, boolean>>({});
     const [promptSettings, setPromptSettings] = useState<Record<string, PromptSettings>>({});
-    const [imagePricing, setImagePricing] = useState<ImagePricing | null>(null);
-
-    const getImagePriceCny = (resolution: string): number | null => {
-        if (!imagePricing) return null;
-        const r = (resolution || '').trim().toUpperCase();
-        if (r === '1K') return imagePricing.price_cny_1k ?? imagePricing.price_cny_default;
-        if (r === '4K') return imagePricing.price_cny_4k ?? imagePricing.price_cny_default;
-        if (r === '2K') return imagePricing.price_cny_2k ?? imagePricing.price_cny_default;
-        return imagePricing.price_cny_default;
-    };
 
     const getSettings = (promptId: string): PromptSettings => {
         if (promptSettings[promptId]) return promptSettings[promptId];
@@ -193,11 +172,11 @@ export function ProjectWorkspace() {
     };
 
     useEffect(() => {
-        if (id && token) {
+        if (id) {
             fetchProjectData(id, { showLoader: true });
         }
         return () => setCurrentProject(null);
-    }, [id, token]);
+    }, [id]);
 
     useEffect(() => {
         const parsedDoc = documents.find(
@@ -282,13 +261,6 @@ export function ProjectWorkspace() {
                 console.debug('Failed to fetch color schemes', e);
             }
 
-            try {
-                const pricingRes = await api.get('/images/pricing');
-                setImagePricing(pricingRes.data || null);
-            } catch (e) {
-                console.debug('Failed to fetch image pricing', e);
-                setImagePricing(null);
-            }
 
         } catch (err) {
             console.error(err);
@@ -473,12 +445,7 @@ export function ProjectWorkspace() {
             await fetchProjectData(id, { showLoader: false });
         } catch (err: any) {
             console.error('Failed to generate image', err);
-            const code = err?.response?.data?.error;
             const msg = getApiErrorMessage(err, '生成图片失败，请稍后重试。');
-            if (code === 'INSUFFICIENT_BALANCE') {
-                alert(msg);
-                return;
-            }
             alert(`生成图片失败：${msg}`);
         }
     };
@@ -764,11 +731,6 @@ export function ProjectWorkspace() {
                         <div className="px-4 py-2 border-b bg-background shrink-0">
                             <div className="text-xs text-muted-foreground">
                                 勾选章节以限定提示词生成范围，点击标题可预览内容。
-                                {imagePricing && (
-                                    <span className="ml-1">
-                                        · 1K ¥{imagePricing.price_cny_1k.toFixed(2)} · 2K ¥{imagePricing.price_cny_2k.toFixed(2)} · 4K ¥{imagePricing.price_cny_4k.toFixed(2)}/张
-                                    </span>
-                                )}
                             </div>
                         </div>
                         <div className="flex-1 overflow-hidden p-4 flex flex-col">
@@ -911,14 +873,10 @@ export function ProjectWorkspace() {
                                             {doc.file_type === 'pdf' && (
                                                 <div className="flex items-center gap-2">
                                                     <button
-                                                        className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border transition-colors ${
-                                                            user?.paddleocr_api_key_set && user?.paddleocr_server_url
-                                                                ? 'border-blue-300 text-blue-600 hover:bg-blue-50 cursor-pointer'
-                                                                : 'border-muted text-muted-foreground cursor-not-allowed opacity-50'
-                                                        }`}
-                                                        disabled={!user?.paddleocr_api_key_set || !user?.paddleocr_server_url || ocrLoading[doc.id] || doc.parse_status === 'parsing'}
+                                                        className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border transition-colors border-blue-300 text-blue-600 hover:bg-blue-50 cursor-pointer"
+                                                        disabled={ocrLoading[doc.id] || doc.parse_status === 'parsing'}
                                                         onClick={() => handleTriggerOcr(doc)}
-                                                        title={!user?.paddleocr_api_key_set || !user?.paddleocr_server_url ? '请先在设置页配置 PaddleOCR Server URL 和 Token' : 'OCR 解析此 PDF'}
+                                                        title="OCR 解析此 PDF"
                                                     >
                                                         {ocrLoading[doc.id]
                                                             ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -1109,11 +1067,7 @@ export function ProjectWorkspace() {
                                                                 ))}
                                                             </SelectContent>
                                                         </Select>
-                                                        {getImagePriceCny(settings.resolution) != null && (
-                                                            <div className="text-[11px] text-muted-foreground mt-1">
-                                                                价格：¥{getImagePriceCny(settings.resolution)!.toFixed(2)}/张
-                                                            </div>
-                                                        )}
+
                                                     </div>
                                                 </div>
                                             </CardContent>

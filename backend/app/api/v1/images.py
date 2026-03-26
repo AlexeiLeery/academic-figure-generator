@@ -1,12 +1,10 @@
-"""Image generation, retrieval, editing, and SSE status streaming endpoints."""
+"""Image generation, retrieval, editing, and SSE status endpoints — personal-use."""
 
 import asyncio
 import json
 import logging
 import mimetypes
 from urllib.parse import quote
-from uuid import UUID
-from decimal import Decimal
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 from fastapi.responses import StreamingResponse
@@ -15,71 +13,30 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sse_starlette.sse import EventSourceResponse
 
 from app.config import get_settings
-from app.core.exceptions import (
-    BadRequestException,
-    ForbiddenException,
-    InsufficientBalanceException,
-    NotFoundException,
-)
-from app.dependencies import get_current_active_user, get_db, get_storage_service
+from app.core.exceptions import BadRequestException, NotFoundException
+from app.dependencies import get_db
 from app.models.image import Image
 from app.models.project import Project
 from app.models.prompt import Prompt
-from app.models.system_settings import SystemSettings
-from app.models.user import User
 from app.schemas.image import (
     ImageDirectGenerateRequest,
     ImageGenerateRequest,
-    ImagePricingResponse,
     ImageResponse,
     ImageStatusResponse,
 )
-from app.tasks.celery_app import celery_app
+from app.services.local_storage_service import LocalStorageService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="", tags=["Images"])
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-async def _get_owned_project(
-    project_id: UUID, user: User, db: AsyncSession
-) -> Project:
+async def _get_project(project_id: str, db: AsyncSession) -> Project:
     result = await db.execute(select(Project).where(Project.id == project_id))
     project: Project | None = result.scalar_one_or_none()
     if project is None or project.status == "deleted":
         raise NotFoundException("Project not found")
-    if project.user_id != user.id:
-        raise ForbiddenException("Not your project")
     return project
-
-
-async def _get_owned_prompt(
-    prompt_id: UUID, user: User, db: AsyncSession
-) -> Prompt:
-    result = await db.execute(select(Prompt).where(Prompt.id == prompt_id))
-    prompt: Prompt | None = result.scalar_one_or_none()
-    if prompt is None:
-        raise NotFoundException("Prompt not found")
-    if prompt.user_id != user.id:
-        raise ForbiddenException("Not your prompt")
-    return prompt
-
-
-async def _get_owned_image(
-    image_id: UUID, user: User, db: AsyncSession
-) -> Image:
-    result = await db.execute(select(Image).where(Image.id == image_id))
-    image: Image | None = result.scalar_one_or_none()
-    if image is None:
-        raise NotFoundException("Image not found")
-    if image.user_id != user.id:
-        raise ForbiddenException("Not your image")
-    return image
 
 
 def _image_to_response(image: Image, download_url: str | None = None) -> ImageResponse:
@@ -103,95 +60,83 @@ def _image_to_response(image: Image, download_url: str | None = None) -> ImageRe
     )
 
 
-def _normalize_object_name(storage_path: str, bucket: str) -> str:
-    """Normalize stored path to a MinIO object name.
+async def _generate_image_async(
+    image_id: str,
+    prompt_text: str,
+    resolution: str,
+    aspect_ratio: str,
+    color_scheme: str | None,
+    reference_image_path: str | None,
+    edit_instruction: str | None,
+) -> None:
+    """Background task: call NanoBanana API and update DB record."""
+    import base64  # noqa: PLC0415
 
-    Backward compatible with older values that were stored as "<bucket>/<object>".
-    """
-    p = storage_path.lstrip("/")
-    prefix = f"{bucket}/"
-    if p.startswith(prefix):
-        return p[len(prefix) :]
-    return p
+    from app.dependencies import get_async_session_factory  # noqa: PLC0415
+    from app.services.image_service import ImageService  # noqa: PLC0415
 
-async def _ensure_nanobanana_key_available(user: User, db: AsyncSession) -> None:
-    """Fail fast if neither BYOK nor platform NanoBanana key is configured."""
-    settings = get_settings()
-    if user.nanobanana_api_key_enc:
-        return
-    if settings.NANOBANANA_API_KEY:
-        return
-    system_key = (
-        await db.execute(
-            select(SystemSettings.nanobanana_api_key_enc).where(SystemSettings.id == 1)
-        )
-    ).scalar_one_or_none()
-    if system_key:
-        return
-    raise BadRequestException(
-        "未配置图片生成 Key：请在服务器环境变量设置 NANOBANANA_API_KEY，"
-        "或在管理员系统设置中配置系统 Key，"
-        "或在用户设置中填写 BYOK（NanoBanana API Key）。"
-    )
+    session_factory = get_async_session_factory()
+    storage = LocalStorageService()
 
-async def _get_image_price_cny(db: AsyncSession) -> Decimal:
-    """Return current per-image price in CNY (defaults to 1.5)."""
-    v = (
-        await db.execute(
-            select(SystemSettings.image_price_cny).where(SystemSettings.id == 1)
-        )
-    ).scalar_one_or_none()
-    if v is None:
-        return Decimal("1.5")
-    return Decimal(str(v))
+    async with session_factory() as session:
+        result = await session.execute(select(Image).where(Image.id == image_id))
+        image: Image | None = result.scalar_one_or_none()
+        if image is None:
+            logger.error("Image %s not found for generation", image_id)
+            return
 
+        image.generation_status = "generating"
+        session.add(image)
+        await session.commit()
 
-async def _get_image_price_cny_for_resolution(db: AsyncSession, resolution: str) -> Decimal:
-    """Return per-resolution image price in CNY with fallback to image_price_cny."""
-    s = (
-        await db.execute(select(SystemSettings).where(SystemSettings.id == 1))
-    ).scalar_one_or_none()
-    fallback = Decimal(str(s.image_price_cny if s and s.image_price_cny is not None else "1.5"))
-    if not s:
-        return fallback
+        try:
+            image_service = ImageService()
 
-    r = (resolution or "").strip()
-    if r in ("1k", "1K") and getattr(s, "image_price_cny_1k", None) is not None:
-        return Decimal(str(s.image_price_cny_1k))
-    if r in ("4k", "4K") and getattr(s, "image_price_cny_4k", None) is not None:
-        return Decimal(str(s.image_price_cny_4k))
-    if r in ("2k", "2K") and getattr(s, "image_price_cny_2k", None) is not None:
-        return Decimal(str(s.image_price_cny_2k))
-    return fallback
+            # Load reference image as base64 if path provided
+            reference_b64: str | None = None
+            if reference_image_path and storage.file_exists(reference_image_path):
+                ref_bytes = storage.get_file(reference_image_path)
+                reference_b64 = base64.b64encode(ref_bytes).decode("ascii")
 
+            # ImageService.generate_image is synchronous — run in executor
+            import asyncio  # noqa: PLC0415
 
-# ---------------------------------------------------------------------------
-# Endpoints
-# ---------------------------------------------------------------------------
+            loop = asyncio.get_event_loop()
+            generated_data = await loop.run_in_executor(
+                None,
+                lambda: image_service.generate_image(
+                    prompt=prompt_text,
+                    resolution=resolution,
+                    aspect_ratio=aspect_ratio,
+                    reference_image_base64=reference_b64,
+                    edit_instruction=edit_instruction,
+                ),
+            )
 
-@router.get("/images/pricing", response_model=ImagePricingResponse)
-async def get_image_pricing(
-    user: User = Depends(get_current_active_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Return current per-resolution image prices (CNY) for user display."""
-    _ = user  # ensure auth; no per-user pricing yet
+            # Decode base64 result to bytes and save locally
+            image_b64 = generated_data.get("image_base64", "")
+            if image_b64:
+                image_bytes = base64.b64decode(image_b64)
+                file_name = f"{image_id}.png"
+                storage_path = storage.save_figure(
+                    f"{image.project_id}/{file_name}", image_bytes
+                )
+                image.storage_path = storage_path
+                image.file_size_bytes = len(image_bytes)
+                image.width_px = generated_data.get("width")
+                image.height_px = generated_data.get("height")
 
-    s = (
-        await db.execute(select(SystemSettings).where(SystemSettings.id == 1))
-    ).scalar_one_or_none()
+            image.generation_status = "completed"
+            image.generation_duration_ms = generated_data.get("duration_ms")
+            image.final_prompt_sent = prompt_text
 
-    fallback = Decimal(str(s.image_price_cny if s and s.image_price_cny is not None else "1.5"))
-    p1 = Decimal(str(getattr(s, "image_price_cny_1k", None) or fallback)) if s else fallback
-    p2 = Decimal(str(getattr(s, "image_price_cny_2k", None) or fallback)) if s else fallback
-    p4 = Decimal(str(getattr(s, "image_price_cny_4k", None) or fallback)) if s else fallback
+        except Exception as exc:
+            image.generation_status = "failed"
+            image.generation_error = str(exc)
+            logger.error("Image %s generation failed: %s", image_id, exc)
 
-    return ImagePricingResponse(
-        price_cny_default=float(fallback),
-        price_cny_1k=float(p1),
-        price_cny_2k=float(p2),
-        price_cny_4k=float(p4),
-    )
+        session.add(image)
+        await session.commit()
 
 
 @router.post(
@@ -200,34 +145,26 @@ async def get_image_pricing(
     status_code=202,
 )
 async def generate_image_from_prompt(
-    prompt_id: UUID,
+    prompt_id: str,
     data: ImageGenerateRequest,
-    user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Generate an image from an existing prompt.
-
-    Creates an Image record in pending state and dispatches a Celery task.
-    """
-    prompt = await _get_owned_prompt(prompt_id, user, db)
-    await _ensure_nanobanana_key_available(user, db)
-
-    image_price_cny = await _get_image_price_cny_for_resolution(db, data.resolution)
-    if Decimal(str(user.balance_cny)) < image_price_cny:
-        raise InsufficientBalanceException(
-            f"余额不足：当前余额 ¥{float(user.balance_cny):.2f}，"
-            f"生成 1 张图片需要 ¥{float(image_price_cny):.2f}。"
-        )
+    """Generate an image from an existing prompt (async background task)."""
+    result = await db.execute(select(Prompt).where(Prompt.id == prompt_id))
+    prompt: Prompt | None = result.scalar_one_or_none()
+    if prompt is None:
+        raise NotFoundException("Prompt not found")
 
     if not prompt.active_prompt:
-        raise BadRequestException(
-            "Prompt has no text. Generate or edit the prompt first."
-        )
+        raise BadRequestException("Prompt has no text. Generate or edit the prompt first.")
+
+    settings = get_settings()
+    if not settings.NANOBANANA_API_KEY:
+        raise BadRequestException("NANOBANANA_API_KEY not configured. Set it in .env file.")
 
     image = Image(
         prompt_id=prompt.id,
         project_id=prompt.project_id,
-        user_id=user.id,
         resolution=data.resolution,
         aspect_ratio=data.aspect_ratio,
         color_scheme=data.color_scheme,
@@ -237,29 +174,22 @@ async def generate_image_from_prompt(
     await db.flush()
     await db.refresh(image)
 
-    task = celery_app.send_task(
-        "app.tasks.image_tasks.generate_image_task",
-        args=[
-            str(image.id),
-            prompt.active_prompt,
-            str(user.id),
-            data.resolution,
-            data.aspect_ratio,
-            data.color_scheme,
-            None,  # reference_image_path
-            None,  # edit_instruction
-        ],
-        queue="images",
+    # Launch background task (no Celery)
+    asyncio.create_task(
+        _generate_image_async(
+            image_id=image.id,
+            prompt_text=prompt.active_prompt,
+            resolution=data.resolution,
+            aspect_ratio=data.aspect_ratio,
+            color_scheme=data.color_scheme,
+            reference_image_path=None,
+            edit_instruction=None,
+        )
     )
-
-    # Persist the task id
-    image.generation_task_id = task.id
-    db.add(image)
 
     return ImageStatusResponse(
         id=image.id,
         generation_status=image.generation_status,
-        generation_task_id=task.id,
     )
 
 
@@ -270,28 +200,19 @@ async def generate_image_from_prompt(
 )
 async def generate_image_direct(
     data: ImageDirectGenerateRequest,
-    user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Generate an image from custom prompt text (no linked Prompt record).
-
-    If project_id is not provided, a default project is auto-created for the user.
-    """
+    """Generate an image from custom prompt text (no linked Prompt record)."""
     project_id = data.project_id
-    await _ensure_nanobanana_key_available(user, db)
 
-    image_price_cny = await _get_image_price_cny_for_resolution(db, data.resolution)
-    if Decimal(str(user.balance_cny)) < image_price_cny:
-        raise InsufficientBalanceException(
-            f"余额不足：当前余额 ¥{float(user.balance_cny):.2f}，"
-            f"生成 1 张图片需要 ¥{float(image_price_cny):.2f}。"
-        )
+    settings = get_settings()
+    if not settings.NANOBANANA_API_KEY:
+        raise BadRequestException("NANOBANANA_API_KEY not configured. Set it in .env file.")
 
     if project_id is None:
-        # Auto-create or reuse a default project for direct generation
+        # Auto-create or reuse a default project
         result = await db.execute(
             select(Project).where(
-                Project.user_id == user.id,
                 Project.name == "直接生成",
                 Project.status == "active",
             )
@@ -299,7 +220,6 @@ async def generate_image_direct(
         project = result.scalar_one_or_none()
         if project is None:
             project = Project(
-                user_id=user.id,
                 name="直接生成",
                 description="通过直接生成模式创建的图片",
             )
@@ -308,12 +228,11 @@ async def generate_image_direct(
             await db.refresh(project)
         project_id = project.id
     else:
-        await _get_owned_project(project_id, user, db)
+        await _get_project(project_id, db)
 
     image = Image(
         prompt_id=None,
         project_id=project_id,
-        user_id=user.id,
         resolution=data.resolution,
         aspect_ratio=data.aspect_ratio,
         color_scheme=data.color_scheme,
@@ -324,62 +243,50 @@ async def generate_image_direct(
     await db.flush()
     await db.refresh(image)
 
-    task = celery_app.send_task(
-        "app.tasks.image_tasks.generate_image_task",
-        args=[
-            str(image.id),
-            data.prompt,
-            str(user.id),
-            data.resolution,
-            data.aspect_ratio,
-            data.color_scheme,
-            None,  # reference_image_path
-            None,  # edit_instruction
-        ],
-        queue="images",
+    asyncio.create_task(
+        _generate_image_async(
+            image_id=image.id,
+            prompt_text=data.prompt,
+            resolution=data.resolution,
+            aspect_ratio=data.aspect_ratio,
+            color_scheme=data.color_scheme,
+            reference_image_path=None,
+            edit_instruction=None,
+        )
     )
-
-    image.generation_task_id = task.id
-    db.add(image)
 
     return ImageStatusResponse(
         id=image.id,
         generation_status=image.generation_status,
-        generation_task_id=task.id,
     )
 
 
 @router.get("/projects/{project_id}/images", response_model=list[ImageResponse])
 async def list_project_images(
-    project_id: UUID,
-    user: User = Depends(get_current_active_user),
+    project_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """List all images for a project, newest first."""
-    await _get_owned_project(project_id, user, db)
-
+    await _get_project(project_id, db)
     result = await db.execute(
         select(Image)
         .where(Image.project_id == project_id)
         .order_by(Image.created_at.desc())
     )
-    images = result.scalars().all()
-    return [_image_to_response(img) for img in images]
+    return [_image_to_response(img) for img in result.scalars().all()]
 
 
 @router.get("/images/{image_id}", response_model=ImageResponse)
 async def get_image(
-    image_id: UUID,
-    user: User = Depends(get_current_active_user),
+    image_id: str,
     db: AsyncSession = Depends(get_db),
-    storage=Depends(get_storage_service),
 ):
-    """Get image metadata and a presigned download URL from MinIO."""
-    image = await _get_owned_image(image_id, user, db)
+    result = await db.execute(select(Image).where(Image.id == image_id))
+    image: Image | None = result.scalar_one_or_none()
+    if image is None:
+        raise NotFoundException("Image not found")
 
     download_url: str | None = None
     if image.storage_path:
-        # Always serve via API so browsers don't need to resolve `minio:9000`.
         download_url = f"{get_settings().API_V1_PREFIX}/images/{image.id}/download"
 
     return _image_to_response(image, download_url=download_url)
@@ -387,41 +294,40 @@ async def get_image(
 
 @router.get("/images/{image_id}/download")
 async def download_image(
-    image_id: UUID,
-    user: User = Depends(get_current_active_user),
+    image_id: str,
     db: AsyncSession = Depends(get_db),
-    storage=Depends(get_storage_service),
 ):
-    """Download an image file via the API (proxy from MinIO)."""
-    image = await _get_owned_image(image_id, user, db)
+    result = await db.execute(select(Image).where(Image.id == image_id))
+    image: Image | None = result.scalar_one_or_none()
+    if image is None:
+        raise NotFoundException("Image not found")
     if not image.storage_path:
         raise NotFoundException("Image file not available")
 
-    object_name = _normalize_object_name(image.storage_path, storage.bucket)
-    file_bytes = storage.download_file(object_name)
+    storage = LocalStorageService()
+    file_bytes = storage.get_file(image.storage_path)
 
-    guessed_type, _ = mimetypes.guess_type(object_name)
+    guessed_type, _ = mimetypes.guess_type(image.storage_path)
     media_type = guessed_type or "application/octet-stream"
-    filename = object_name.split("/")[-1] or f"{image_id}"
-
-    # Use inline so <img src="..."> can render; browsers can still save via download attribute.
+    filename = image.storage_path.split("/")[-1] or f"{image_id}.png"
     quoted = quote(filename)
     headers = {"Content-Disposition": f"inline; filename*=UTF-8''{quoted}"}
+
     return StreamingResponse(iter([file_bytes]), media_type=media_type, headers=headers)
 
 
 @router.get("/images/{image_id}/status", response_model=ImageStatusResponse)
 async def get_image_status(
-    image_id: UUID,
-    user: User = Depends(get_current_active_user),
+    image_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """Poll an image's generation status."""
-    image = await _get_owned_image(image_id, user, db)
+    result = await db.execute(select(Image).where(Image.id == image_id))
+    image: Image | None = result.scalar_one_or_none()
+    if image is None:
+        raise NotFoundException("Image not found")
     return ImageStatusResponse(
         id=image.id,
         generation_status=image.generation_status,
-        generation_task_id=image.generation_task_id,
         generation_error=image.generation_error,
     )
 
@@ -432,41 +338,37 @@ async def get_image_status(
     status_code=202,
 )
 async def edit_image(
-    image_id: UUID,
+    image_id: str,
     edit_instruction: str = Form(...),
     reference_image: UploadFile | None = File(None),
-    user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
-    storage=Depends(get_storage_service),
 ):
-    """Image-to-image editing.
+    """Image-to-image editing via NanoBanana API."""
+    result = await db.execute(select(Image).where(Image.id == image_id))
+    source_image: Image | None = result.scalar_one_or_none()
+    if source_image is None:
+        raise NotFoundException("Image not found")
 
-    Uploads the reference image (or uses the existing image) and dispatches
-    a Celery task that sends both the reference and edit instruction to the
-    image generation API.
-    """
-    source_image = await _get_owned_image(image_id, user, db)
-    await _ensure_nanobanana_key_available(user, db)
+    settings = get_settings()
+    if not settings.NANOBANANA_API_KEY:
+        raise BadRequestException("NANOBANANA_API_KEY not configured.")
 
-    # Determine the reference image path
+    storage = LocalStorageService()
     reference_path: str | None = source_image.storage_path
+
     if reference_image is not None:
         contents = await reference_image.read()
         ref_filename = reference_image.filename or "reference.png"
-        reference_path = f"references/{user.id}/{image_id}/{ref_filename}"
-        content_type = reference_image.content_type or "image/png"
-        storage.upload_file(contents, reference_path, content_type)
+        reference_path = storage.save_upload(f"references/{image_id}/{ref_filename}", contents)
 
     if not reference_path:
         raise BadRequestException(
             "No reference image available. Upload one or use an image that has been generated."
         )
 
-    # Create a new Image record for the edited result
     new_image = Image(
         prompt_id=source_image.prompt_id,
         project_id=source_image.project_id,
-        user_id=user.id,
         resolution=source_image.resolution,
         aspect_ratio=source_image.aspect_ratio,
         color_scheme=source_image.color_scheme,
@@ -478,53 +380,35 @@ async def edit_image(
     await db.flush()
     await db.refresh(new_image)
 
-    task = celery_app.send_task(
-        "app.tasks.image_tasks.generate_image_task",
-        args=[
-            str(new_image.id),
-            source_image.final_prompt_sent or "",
-            str(user.id),
-            source_image.resolution,
-            source_image.aspect_ratio,
-            source_image.color_scheme,
-            reference_path,  # reference_image_path
-            edit_instruction,  # edit_instruction
-        ],
-        queue="images",
+    asyncio.create_task(
+        _generate_image_async(
+            image_id=new_image.id,
+            prompt_text=source_image.final_prompt_sent or "",
+            resolution=source_image.resolution,
+            aspect_ratio=source_image.aspect_ratio,
+            color_scheme=source_image.color_scheme,
+            reference_image_path=reference_path,
+            edit_instruction=edit_instruction,
+        )
     )
-
-    new_image.generation_task_id = task.id
-    db.add(new_image)
-    await db.flush()
 
     return ImageStatusResponse(
         id=new_image.id,
         generation_status=new_image.generation_status,
-        generation_task_id=task.id,
     )
-
-
-# ---------------------------------------------------------------------------
-# SSE streaming endpoint
-# ---------------------------------------------------------------------------
 
 
 @router.get("/images/{image_id}/stream")
 async def stream_image_status(
-    image_id: UUID,
-    user: User = Depends(get_current_active_user),
+    image_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """Server-Sent Events endpoint for real-time image generation status.
-
-    Polls the database every 2 seconds and yields SSE events until the
-    generation reaches a terminal state (completed or failed).
-    """
-    # Verify ownership once before starting the stream
-    image = await _get_owned_image(image_id, user, db)
+    """SSE endpoint for real-time image generation status."""
+    result = await db.execute(select(Image).where(Image.id == image_id))
+    if result.scalar_one_or_none() is None:
+        raise NotFoundException("Image not found")
 
     async def event_generator():
-        """Yield SSE events until terminal state is reached."""
         from app.dependencies import get_async_session_factory  # noqa: PLC0415
 
         session_factory = get_async_session_factory()
@@ -532,23 +416,15 @@ async def stream_image_status(
         last_status: str | None = None
 
         while True:
-            # Use a fresh session for each poll to get current data
             async with session_factory() as session:
-                result = await session.execute(
-                    select(Image).where(Image.id == image_id)
-                )
+                result = await session.execute(select(Image).where(Image.id == image_id))
                 current_image: Image | None = result.scalar_one_or_none()
 
             if current_image is None:
-                yield {
-                    "event": "error",
-                    "data": json.dumps({"error": "Image not found"}),
-                }
+                yield {"event": "error", "data": json.dumps({"error": "Image not found"})}
                 break
 
             current_status = current_image.generation_status
-
-            # Only emit when status changes (or on first poll)
             if current_status != last_status:
                 last_status = current_status
                 event_data = {
@@ -557,17 +433,10 @@ async def stream_image_status(
                     "storage_path": current_image.storage_path,
                     "generation_duration_ms": current_image.generation_duration_ms,
                 }
-                yield {
-                    "event": "status",
-                    "data": json.dumps(event_data),
-                }
+                yield {"event": "status", "data": json.dumps(event_data)}
 
                 if current_status in terminal_states:
-                    # Send a final "done" event so clients know to close
-                    yield {
-                        "event": "done",
-                        "data": json.dumps({"status": current_status}),
-                    }
+                    yield {"event": "done", "data": json.dumps({"status": current_status})}
                     break
 
             await asyncio.sleep(2)

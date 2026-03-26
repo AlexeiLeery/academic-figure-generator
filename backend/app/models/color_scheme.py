@@ -1,28 +1,22 @@
-from typing import TYPE_CHECKING, Optional
+"""Color scheme model — personal-use version (no user_id)."""
 
-from sqlalchemy import Boolean, ForeignKey, String
-from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from __future__ import annotations
 
-from .base import Base, TimestampMixin
+from typing import Optional
 
-if TYPE_CHECKING:
-    from .user import User
+from sqlalchemy import Boolean, JSON, String
+from sqlalchemy.orm import Mapped, mapped_column
+
+from .base import Base, TimestampMixin, new_uuid
 
 
 class ColorScheme(Base, TimestampMixin):
     __tablename__ = "color_schemes"
 
-    id: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True),
+    id: Mapped[str] = mapped_column(
+        String(36),
         primary_key=True,
-        server_default="gen_random_uuid()",
-    )
-    user_id: Mapped[Optional[UUID]] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=True,
-        comment="null = system preset",
+        default=new_uuid,
     )
     name: Mapped[str] = mapped_column(
         String(100),
@@ -34,7 +28,7 @@ class ColorScheme(Base, TimestampMixin):
         comment="preset/custom",
     )
     colors: Mapped[dict] = mapped_column(
-        JSONB,
+        JSON,
         nullable=False,
         comment=(
             "Keys: primary, secondary, tertiary, text, fill, "
@@ -46,6 +40,3 @@ class ColorScheme(Base, TimestampMixin):
         default=False,
         nullable=False,
     )
-
-    # Relationships
-    user: Mapped[Optional["User"]] = relationship("User")

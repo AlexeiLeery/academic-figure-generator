@@ -1,10 +1,12 @@
-"""FastAPI application factory."""
+"""FastAPI application factory — personal-use version."""
 
 import logging
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
 from app.core.exceptions import register_exception_handlers
@@ -16,62 +18,34 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan: startup and shutdown logic."""
-    # Startup
-    logger.info("Starting up Academic Figure Generator API...")
+    logger.info("Starting up Academic Figure Generator API (personal-use)...")
+
+    # Create SQLite tables
     try:
-        from app.services.storage_service import StorageService  # noqa: PLC0415
+        from app.dependencies import _engine  # noqa: PLC0415
+        from app.models import Base  # noqa: PLC0415
 
-        storage = StorageService()
-        storage.ensure_bucket()
-        logger.info("MinIO bucket verified.")
+        async with _engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("SQLite database tables verified.")
     except Exception as exc:  # noqa: BLE001
-        logger.warning("MinIO bucket setup failed (continuing): %s", exc)
+        logger.warning("Database setup failed (continuing): %s", exc)
 
-    # Seed default admin user if no admin exists
-    try:
-        await _seed_admin_user()
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Admin user seeding failed (continuing): %s", exc)
-
-    # Seed preset color schemes if missing
+    # Seed preset color schemes
     try:
         await _seed_preset_color_schemes()
     except Exception as exc:  # noqa: BLE001
         logger.warning("Preset color scheme seeding failed (continuing): %s", exc)
 
+    # Ensure data directories exist
+    settings = get_settings()
+    data_dir = Path(settings.DATA_DIR)
+    (data_dir / "uploads").mkdir(parents=True, exist_ok=True)
+    (data_dir / "figures").mkdir(parents=True, exist_ok=True)
+
     yield
 
-    # Shutdown
     logger.info("Shutting down Academic Figure Generator API...")
-
-
-async def _seed_admin_user() -> None:
-    """Create a default admin account if none exists."""
-    from sqlalchemy import select  # noqa: PLC0415
-
-    from app.core.security import hash_password  # noqa: PLC0415
-    from app.dependencies import get_async_session_factory  # noqa: PLC0415
-    from app.models.user import User  # noqa: PLC0415
-
-    session_factory = get_async_session_factory()
-    async with session_factory() as session:
-        # Check if any admin already exists
-        result = await session.execute(select(User).where(User.is_admin.is_(True)))
-        existing_admin = result.scalar_one_or_none()
-        if existing_admin is not None:
-            logger.info("Admin user already exists (%s), skipping seed.", existing_admin.email)
-            return
-
-        admin = User(
-            email="admin@admin.com",
-            password_hash=hash_password("admin"),
-            display_name="管理员",
-            is_admin=True,
-            is_active=True,
-        )
-        session.add(admin)
-        await session.commit()
-        logger.info("Default admin user created: admin@admin.com / admin")
 
 
 async def _seed_preset_color_schemes() -> None:
@@ -103,7 +77,6 @@ async def _seed_preset_color_schemes() -> None:
 
             session.add(
                 ColorScheme(
-                    user_id=None,
                     name=display_name,
                     type="preset",
                     colors=colors,
@@ -120,14 +93,14 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title="Academic Figure Generator API",
-        version="0.1.0",
-        description="AI-powered scientific paper illustration service",
+        version="0.2.0",
+        description="AI-powered scientific paper illustration service (personal-use)",
         docs_url="/docs" if settings.DEBUG else None,
         redoc_url="/redoc" if settings.DEBUG else None,
         lifespan=lifespan,
     )
 
-    # Middleware (CORS, request logging, etc.)
+    # Middleware (CORS, request logging)
     setup_middleware(app)
 
     # Exception handlers
@@ -136,23 +109,23 @@ def create_app() -> FastAPI:
     # Routers
     _include_routers(app, settings.API_V1_PREFIX)
 
+    # Static file serving for generated figures and uploads
+    data_dir = Path(settings.DATA_DIR)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/data", StaticFiles(directory=str(data_dir)), name="data")
+
     return app
 
 
 def _include_routers(app: FastAPI, prefix: str) -> None:
     """Register all v1 API routers."""
-    # Each router module is imported lazily so missing stubs don't block startup.
     router_modules = [
-        ("app.api.v1.auth", "router"),
         ("app.api.v1.health", "router"),
         ("app.api.v1.projects", "router"),
         ("app.api.v1.documents", "router"),
         ("app.api.v1.prompts", "router"),
         ("app.api.v1.images", "router"),
         ("app.api.v1.color_schemes", "router"),
-        ("app.api.v1.usage", "router"),
-        ("app.api.v1.admin", "router"),
-        ("app.api.v1.payment", "router"),
     ]
 
     for module_path, attr in router_modules:

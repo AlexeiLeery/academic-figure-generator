@@ -4,21 +4,11 @@ import { Button } from '../components/ui/button';
 import { Textarea } from '../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Loader2, Wand2, Image as ImageIcon, Download, AlertCircle } from 'lucide-react';
-import { useAuthStore } from '../store/authStore';
-import { api } from '../lib/api';
+import api from '../lib/api';
 import { fetchAuthedBlob } from '../lib/blob';
 import { getApiErrorMessage } from '../lib/apiError';
 
-type ImagePricing = {
-   currency: string;
-   price_cny_default: number;
-   price_cny_1k: number;
-   price_cny_2k: number;
-   price_cny_4k: number;
-};
-
 export function Generate() {
-   const { user } = useAuthStore();
    const [prompt, setPrompt] = useState('');
    const [aspectRatio, setAspectRatio] = useState('16:9');
    const [isGenerating, setIsGenerating] = useState(false);
@@ -26,7 +16,6 @@ export function Generate() {
    const [resultImage, setResultImage] = useState<{ url: string; filename: string; status: 'pending' | 'completed' | 'failed' } | null>(null);
    const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
    const blobUrlRef = useRef<string | null>(null);
-   const [imagePricing, setImagePricing] = useState<ImagePricing | null>(null);
 
    useEffect(() => {
       return () => {
@@ -35,21 +24,6 @@ export function Generate() {
             blobUrlRef.current = null;
          }
       };
-   }, []);
-
-   useEffect(() => {
-      let mounted = true;
-      (async () => {
-         try {
-            const res = await api.get('/images/pricing');
-            if (!mounted) return;
-            setImagePricing(res.data || null);
-         } catch {
-            if (!mounted) return;
-            setImagePricing(null);
-         }
-      })();
-      return () => { mounted = false; };
    }, []);
 
    const stopPolling = useCallback(() => {
@@ -92,7 +66,7 @@ export function Generate() {
    }, []);
 
    const handleGenerate = async () => {
-      if (!prompt.trim() || !user) return;
+      if (!prompt.trim()) return;
       stopPolling();
       setIsGenerating(true);
       setResultImage({ url: '', filename: 'academic-figure.png', status: 'pending' });
@@ -108,8 +82,7 @@ export function Generate() {
          pollTimerRef.current = setTimeout(() => pollStatus(imageId), 3000);
       } catch (e: any) {
          console.error(e);
-         const code = e.response?.data?.error;
-         const msg = getApiErrorMessage(e, code === 'INSUFFICIENT_BALANCE' ? '余额不足，无法生成图片。' : '请求失败，请检查网络连接');
+         const msg = getApiErrorMessage(e, '请求失败，请检查网络连接');
          setError(msg);
          setResultImage(null);
          setIsGenerating(false);
@@ -145,12 +118,7 @@ export function Generate() {
                         onChange={e => setPrompt(e.target.value)}
                      />
                   </CardContent>
-                  <CardFooter className="flex items-center justify-between gap-3 flex-wrap border-t p-4">
-                     {imagePricing && (
-                        <div className="text-xs text-muted-foreground">
-                           当前价格（2K）：¥{imagePricing.price_cny_2k.toFixed(2)}/张
-                        </div>
-                     )}
+                  <CardFooter className="flex items-center justify-end gap-3 flex-wrap border-t p-4">
                      <Select value={aspectRatio} onValueChange={setAspectRatio}>
                         <SelectTrigger className="w-[120px]">
                            <SelectValue />

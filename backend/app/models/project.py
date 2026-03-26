@@ -1,34 +1,27 @@
+"""Project model — personal-use version (no user_id)."""
+
+from __future__ import annotations
+
 from typing import TYPE_CHECKING, Optional
 
-from sqlalchemy import ForeignKey, Index, String, Text
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy import JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from .base import Base, TimestampMixin
+from .base import Base, TimestampMixin, new_uuid
 
 if TYPE_CHECKING:
     from .document import Document
     from .image import Image
     from .prompt import Prompt
-    from .user import User
 
 
 class Project(Base, TimestampMixin):
     __tablename__ = "projects"
 
-    __table_args__ = (
-        Index("ix_projects_user_id", "user_id"),
-    )
-
-    id: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True),
+    id: Mapped[str] = mapped_column(
+        String(36),
         primary_key=True,
-        server_default="gen_random_uuid()",
-    )
-    user_id: Mapped[UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=False,
+        default=new_uuid,
     )
     name: Mapped[str] = mapped_column(
         String(200),
@@ -49,7 +42,7 @@ class Project(Base, TimestampMixin):
         nullable=False,
     )
     custom_colors: Mapped[Optional[dict]] = mapped_column(
-        JSONB,
+        JSON,
         nullable=True,
     )
     status: Mapped[str] = mapped_column(
@@ -60,7 +53,6 @@ class Project(Base, TimestampMixin):
     )
 
     # Relationships
-    user: Mapped["User"] = relationship("User", back_populates="projects")
     documents: Mapped[list["Document"]] = relationship(
         "Document", back_populates="project", cascade="all, delete-orphan"
     )
